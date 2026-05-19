@@ -1,0 +1,60 @@
+# Executions
+
+An execution is a single invocation of a workflow. Each execution has a unique `execution_id` (auto-generated or specified by the caller) and progresses through a sequence of statuses as it runs.
+
+# Triggering an execution
+
+You can start a workflow execution from client code using the Mistral SDK. The `workflow_identifier` must match the `name` you passed to `@workflows.workflow.define()`. If you don't provide an `execution_id`, the platform generates one automatically.
+
+**Python**
+
+```python
+from mistralai.client import Mistral
+
+client = Mistral(api_key="your_key")
+
+execution = client.workflows.execute_workflow(
+    workflow_identifier="my_workflow",
+    input={"data": "hello"},
+    execution_id="my-run-2024-01-15",  # optional custom ID
+)
+print(execution.model_dump_json(indent=2))
+```
+
+The returned `execution` object contains the `execution_id` and the initial `status` (typically `RUNNING`). You can also trigger executions from [AI Studio](https://console.mistral.ai/), from [le Chat](https://chat.mistral.ai/), or via a schedule.
+
+# Execution statuses
+
+An execution starts as `RUNNING`, may move through transitional states, and ends in one of several terminal states.
+
+**Terminal states** (the execution has finished and won't transition further):
+
+- `COMPLETED`: finished successfully
+- `FAILED`: terminated with an unhandled error
+- `CANCELED`: gracefully stopped
+- `TERMINATED`: forcefully stopped
+- `TIMED_OUT`: exceeded `execution_timeout`
+- `CONTINUED_AS_NEW`: history reset via continue-as-new (a new run takes over under a new `execution_id`)
+
+**Transitional state**:
+
+- `RETRYING_AFTER_ERROR`: failed and scheduled for retry; the execution stays in this state until the retry resolves to a terminal status
+
+# Reading execution state
+
+To inspect an execution after triggering it, fetch it by ID:
+
+**Python**
+
+```python
+execution = client.workflows.executions.get_workflow_execution(execution_id="my-run-2024-01-15")
+print(execution.status, execution.result)
+```
+
+For the full event log, use the history endpoint (`GET /v1/workflows/executions/{execution_id}/history`). For live progress as the workflow runs, see [Streaming](/studio-api/workflows/building-workflows/streaming).
+
+# Executions versus runs
+
+An **execution** is a workflow invocation with a stable `execution_id` that persists across its entire lifetime. A **run** is a single attempt within that execution. Most of the time, an execution has exactly one run. But if a workflow is reset to a previous point in its history, a new run begins under the same `execution_id`.
+
+Only one run can be active at a time. API endpoints (`/cancel`, `/terminate`, `/signals`, `/queries`, `/updates`) always target the **latest run** of an execution.
