@@ -14,7 +14,7 @@ All Python code lives under `src/meow/` with a `src/` layout. See [SPEC.md](SPEC
 
 ## Local setup
 
-Python 3.12 + the [Astral](https://astral.sh) tooling stack:
+Python 3.13 + the [Astral](https://astral.sh) tooling stack:
 
 - [`uv`](https://docs.astral.sh/uv/) — package and project manager
 - [`ruff`](https://docs.astral.sh/ruff/) — linter and formatter
@@ -51,6 +51,16 @@ docker compose up --build
 ```
 
 The receiver listens on `:8000` inside its container; Caddy fronts it on `:443`. For dev without TLS you can hit `http://localhost:8000/healthz` directly via `docker compose up receiver`.
+
+### Git hooks (lefthook)
+
+Run once after `uv sync`:
+
+```bash
+uv run lefthook install
+```
+
+This wires `pre-commit` (ruff + format check + ty) and `pre-push` (full lint + tests) into `.git/hooks/`.
 
 ## Running checks locally
 

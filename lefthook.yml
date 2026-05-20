@@ -1,0 +1,26 @@
+# Git hooks managed by lefthook (https://lefthook.dev).
+# Run `uv run lefthook install` once after `uv sync` to wire hooks into .git/hooks/.
+
+pre-commit:
+  parallel: true
+  commands:
+    ruff:
+      glob: "*.py"
+      run: uv run ruff check {staged_files}
+    ruff-format:
+      glob: "*.py"
+      run: uv run ruff format --check {staged_files}
+    ty:
+      run: uv run ty check
+
+pre-push:
+  parallel: true
+  commands:
+    ruff:
+      run: uv run ruff check .
+    ruff-format:
+      run: uv run ruff format --check .
+    ty:
+      run: uv run ty check
+    pytest:
+      run: uv run pytest

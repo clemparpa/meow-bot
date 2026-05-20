@@ -247,7 +247,7 @@ async def run_review_in_sandbox(
 
 Pré-construit, contient :
 
-- Ubuntu + Python 3.12 + git + `gh` CLI
+- Ubuntu + Python 3.13 + git + `gh` CLI
 - `mistral-vibe` installé en venv système
 - Pré-configuration `.vibe/` minimale
 
