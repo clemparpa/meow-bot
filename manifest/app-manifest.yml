@@ -1,0 +1,34 @@
+# GitHub App Manifest for meow-bot
+#
+# Used by the GitHub App Manifest flow to pre-fill the "Create a new
+# GitHub App" form in one click. See:
+#   https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest
+#
+# Before posting this manifest to GitHub, substitute the
+# MEOW_DOMAIN_PLACEHOLDER token in `hook_attributes.url` with the
+# domain that points to your self-hosted receiver (e.g. `meow.example.com`).
+#
+# Permissions and events mirror SPEC.md §5 (v0.1 read-only review profile).
+
+name: meow-bot
+description: >-
+  Self-hostable, OSS GitHub collaborator powered by Mistral Vibe. Tag it on a
+  PR to get an automated review in a sandboxed environment. Bring your own
+  keys, host on your own VPS.
+url: https://github.com/clemparpa/meow-bot
+public: false
+
+default_permissions:
+  contents: read
+  issues: write
+  pull_requests: write
+  metadata: read
+
+default_events:
+  - issue_comment
+  - pull_request
+  - installation
+  - installation_repositories
+
+hook_attributes:
+  url: https://MEOW_DOMAIN_PLACEHOLDER/gh/webhook
