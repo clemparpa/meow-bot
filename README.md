@@ -61,6 +61,21 @@ The intended flow targets `< 15 min` for a developer who already runs Docker on 
 5. `docker compose up -d`.
 6. Install your new App on a target repo, then `@<your-bot> review` on a PR.
 
+## Create your GitHub App
+
+The repo ships a [GitHub App manifest](manifest/app-manifest.yml) that pre-fills GitHub's "Create App" form with the right permissions and events (see [SPEC.md §5](SPEC.md)) so you don't have to click through them manually.
+
+1. Edit `manifest/app-manifest.yml` and replace `MEOW_DOMAIN_PLACEHOLDER` with the domain pointing at your VPS (e.g. `meow.example.com`).
+2. Convert the YAML to JSON:
+
+   ```bash
+   python -c "import yaml, json; print(json.dumps(yaml.safe_load(open('manifest/app-manifest.yml'))))" > manifest/app-manifest.json
+   ```
+
+3. Submit that JSON to `https://github.com/settings/apps/new?state=<random>` via a small HTML form (`<input type="hidden" name="manifest" value="...">`) — this is the standard manifest POST flow described in the [GitHub docs](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest). GitHub redirects you back with your App's `id`, `pem`, and `webhook_secret`.
+
+End-to-end validation of this flow is deferred to `v0.1.0`; for now treat the manifest as the source of truth for permissions and events.
+
 ## Configuration on the target repo
 
 Repos using your bot can drop a `.meow.yml` at their root to tune behavior:
