@@ -1,137 +1,109 @@
-# `ci-vibe`
+# `meow-bot`
 
-> A GitHub Action that wraps [Mistral Vibe](https://github.com/mistralai/mistral-vibe) in headless mode (`vibe --prompt`) to automate code review, security review, and issue triage in any GitHub repository.
+> A self-hostable, OSS GitHub App that behaves like a human teammate on your repos: tag it in an issue or PR and it responds, reviews, and (later) opens PRs of its own. Powered by [Mistral Vibe](https://github.com/mistralai/mistral-vibe).
 
-[![CI](https://github.com/clemparpa/ci-vibe/actions/workflows/ci.yml/badge.svg)](https://github.com/clemparpa/ci-vibe/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 ---
 
 ## Status
 
-🚧 **Pre-release.** Current version: `v0.1.0` (MVP).
+**Pre-alpha (`v0.0.x`).** Scaffold only — not ready for production use. The first runnable feature (`MENTION_REVIEW`) lands in `v0.1.0`. See [SPEC.md](SPEC.md) for the full design and roadmap.
 
-| Mode | v0.1 status |
-|------|-------------|
-| `review` — PR code review | ✅ available |
-| `security` — SAST-like PR review | 🚧 v0.2 |
-| `triage` — issue triage on open | 🚧 v0.3 |
-| `custom` — arbitrary prompt | 🚧 v0.4 |
+## What it does
 
-## TL;DR
+You install `meow-bot` on your GitHub repos. Then, on any pull request:
 
-```yaml
-# .github/workflows/review.yml
-name: Code review
-on: pull_request
-permissions:
-  contents: read
-  pull-requests: write
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: clemparpa/ci-vibe@v0
-        with:
-          mistral-api-key: ${{ secrets.MISTRAL_API_KEY }}
-          mode: review
+```text
+@your-meow-bot review
 ```
 
-That's it. On every PR, an automated review is posted as a comment.
+The bot pulls the PR diff, runs Mistral Vibe in an isolated sandbox, and posts a review as a comment. Read-only by default — no commits, no pushes.
+
+Later versions add `CODE_REQUEST` (open a PR from a natural-language request), `TRIAGE` (label and analyze new issues), and a proactive cron scanner. See the roadmap in [SPEC.md §17](SPEC.md).
+
+## Distribution model
+
+`meow-bot` is **self-hosted and bring-your-own-keys** by design:
+
+- You host the worker on your own VPS via `docker compose up`.
+- You create your own GitHub App from the provided manifest (1-click flow).
+- You bring your own Mistral, Daytona, and GitHub App credentials.
+
+No central service hosted by the maintainers. No quotas, no billing, no usage tracking. Just a Docker image you run.
+
+A managed / SaaS mode may exist later as a separate sub-project — not in the core repo.
+
+## Architecture
+
+Three services on the host:
+
+```text
+GitHub → receiver (FastAPI, HMAC) → Mistral Workflows (managed)
+                                          ↓
+                                       worker → Daytona sandbox (Vibe)
+                                          ↓
+                                       GitHub (post comment)
+```
+
+Mistral Workflows (durability, retries, cron) and Daytona (ephemeral sandboxes) are external managed services you also sign up for. See [SPEC.md §3](SPEC.md) for the detailed diagram.
 
 ## Quickstart
 
-1. Create a Mistral API key at <https://console.mistral.ai/> and add it to your repo as a secret named `MISTRAL_API_KEY`.
-2. Copy the snippet above into `.github/workflows/review.yml`.
-3. Open a PR. Within ~1 minute, you should see a review comment.
+> Quickstart is being written in tandem with `v0.0.x`. For now, see the placeholder at [docs/quickstart.md](docs/quickstart.md) (added in the scaffold commits).
 
-For more advanced configuration, see [examples/](examples/).
+The intended flow targets `< 15 min` for a developer who already runs Docker on a VPS:
 
-## Inputs
+1. Provision a VPS with a domain pointing at it.
+2. Clone this repo.
+3. Click the **Create my Meow App** link in the README (the GitHub App manifest flow registers the App with the right permissions in one click).
+4. Drop the generated `.pem` and webhook secret into `.env`.
+5. `docker compose up -d`.
+6. Install your new App on a target repo, then `@<your-bot> review` on a PR.
 
-| Name | Default | Description |
-|------|---------|-------------|
-| `mistral-api-key` | _(required)_ | Mistral API key. |
-| `mode` | `review` | One of `review`, `security`, `triage`, `custom`. Only `review` is implemented in v0.1. |
-| `prompt` | `''` | Custom prompt. Required when `mode=custom`. |
-| `prompt-override` | `false` | If `true`, append `prompt` to the mode's template. |
-| `model` | `mistral-medium-3.5` | Mistral model identifier (e.g. `mistral-medium-3.5`, `devstral-2`). |
-| `max-turns` | `10` | Maximum agent turns. |
-| `max-price` | `1.00` | Maximum cost in USD. Vibe stops if exceeded. |
-| `allowed-tools` | _(mode-dependent)_ | Comma-separated Vibe tools to enable. Defaults: `read_file,grep,bash` for `review`. |
-| `comment-pr` | `true` | Post the result as a PR/issue comment. |
-| `upload-artifact` | `true` | Upload raw output as a workflow artifact. |
-| `exclude-paths` | `''` | Comma-separated globs to exclude from analysis. |
-| `agents-md-path` | `AGENTS.md` | Path to `AGENTS.md` in the target repo. Copied to `.vibe/AGENTS.md` before running Vibe. Pass `''` to disable. |
-| `vibe-version` | _(latest tested)_ | Pin a specific Mistral Vibe version. |
-| `github-token` | `${{ github.token }}` | Token used to comment on PRs/issues. |
-| `fail-on-findings` | `false` | For `mode=security` (not in v0.1): fail the job if any `High` finding is reported. |
+## Configuration on the target repo
 
-## Outputs
+Repos using your bot can drop a `.meow.yml` at their root to tune behavior:
 
-| Name | Description |
-|------|-------------|
-| `result-path` | Path to the markdown report produced by Vibe. |
-| `findings-count` | Number of findings detected (security mode) or suggestions (review mode). Extracted from a `<!-- findings:N -->` marker in the report. |
-| `cost-usd` | ⚠️ Returns `0` in v0.x. `vibe --output json` does not expose `AgentStats.session_cost`. Tracked upstream. |
+```yaml
+# .meow.yml — optional; all fields have sane defaults
+model: mistral-medium-3.5
+max_turns: 15
+max_price_usd: 0.50
+language: auto
+agents_md_path: AGENTS.md
+exclude_paths:
+  - "vendor/**"
+  - "**/*.lock"
+```
 
-## Supported models
-
-| Model | Notes |
-|-------|-------|
-| `mistral-medium-3.5` (default) | Balanced quality/cost. Recommended for `review`. |
-| `devstral-2` | Cheaper alternative tuned for code tasks. |
-
-## `AGENTS.md` customization
-
-If your repo has an `AGENTS.md` at the root (per the [agents.md spec](https://agents.md/)), `ci-vibe` automatically copies it to `.vibe/AGENTS.md` before invoking Vibe, so your project's conventions and style guide flow into the review. To use a different path, set the `agents-md-path` input. To disable, pass an empty string.
+Full schema in [SPEC.md §10](SPEC.md).
 
 ## Security
 
-- Always use a dedicated Mistral API key for CI with a usage cap set in the console.
-- Enable **Require approval for all external contributors** in `Settings → Actions` to mitigate prompt-injection from fork PRs.
-- Minimum workflow permissions: `contents: read`, `pull-requests: write`.
-- See [`SECURITY.md`](SECURITY.md) for vulnerability reporting.
+- Webhook bodies are validated with HMAC-SHA256 (`X-Hub-Signature-256`).
+- Installation tokens are minted just-in-time and down-scoped per intent (`contents: read` for review mode, etc.).
+- Vibe runs in an ephemeral Daytona sandbox with no host secrets mounted.
+- `max_turns` and `max_price` are always enforced.
+- See [SECURITY.md](SECURITY.md) for vulnerability reporting, and [SPEC.md §12](SPEC.md) for the full threat model.
 
-The action sanitizes PR diffs (strips HTML comments, invisible Unicode characters, hidden HTML attributes) and scrubs secrets from comments before posting.
+## Roadmap (summary)
 
-## Cost estimate
+| Version | Highlight |
+|---|---|
+| `v0.0.x` | Scaffold (Docker, receiver, manifest). |
+| `v0.1.0` | `MENTION_REVIEW` end-to-end (read-only). |
+| `v0.2.0` | Multi-intent classifier, per-thread budgets, `MENTION_QUESTION`. |
+| `v0.3.0` | `CODE_REQUEST` (writes a branch, opens a PR). |
+| `v0.4.0` | `TRIAGE` for new issues. |
+| `v0.5.0` | Proactive cron scanner (opt-in). |
+| `v1.0.0` | API stable. |
 
-| Mode | Per run (typical) |
-|------|-------------------|
-| `review` | $0.10 – $0.30 |
-| `security` (v0.2+) | $0.50 – $1.50 |
-
-`max-price` is enforced by Vibe itself — it will stop the agent if the cap is reached.
-
-## How is this different from `anthropics/claude-code-action`?
-
-|  | `ci-vibe` | `claude-code-action` |
-|--|-----------|----------------------|
-| Provider | Mistral | Anthropic |
-| Model | `mistral-medium-3.5` / `devstral-2` | Claude (Sonnet/Opus/Haiku) |
-| Runtime | Composite (bash + `uv`) | Composite (Bun + TS) |
-| License | Apache-2.0 | MIT |
-| Status | Early (v0.1 MVP) | Mature |
-
-Use whichever model/provider you prefer or have a key for. They are not feature-equivalent — `claude-code-action` is much more mature.
-
-## Roadmap
-
-See [`SPEC.md`](SPEC.md) §13. Highlights:
-
-- v0.2 — `mode: security`
-- v0.3 — `mode: triage`
-- v0.4 — `mode: custom`, `agents-md-path` polish
-- v0.5 — `fail-on-findings`, optional SARIF upload
-- v1.0 — API stable, marketplace publish
+Detailed criteria in [SPEC.md §17 / §19](SPEC.md).
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). All contributions are subject to the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). All contributions are subject to the [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## License
 

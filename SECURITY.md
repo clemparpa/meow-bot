@@ -2,13 +2,13 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in `ci-vibe`, **do not open a public issue**.
+If you discover a security vulnerability in `meow-bot`, **do not open a public issue**.
 
 Instead, use the **GitHub Private Vulnerability Reporting** feature:
 
-1. Go to the [Security tab](https://github.com/clemparpa/ci-vibe/security) of this repository.
+1. Go to the [Security tab](https://github.com/clemparpa/meow-bot/security) of this repository.
 2. Click **Report a vulnerability**.
-3. Fill in the form with as much detail as possible (affected version, reproduction steps, impact).
+3. Fill in the form with as much detail as possible (affected version, reproduction steps, impact, suggested fix if any).
 
 ## Response Targets
 
@@ -17,21 +17,28 @@ Instead, use the **GitHub Private Vulnerability Reporting** feature:
 
 ## Scope
 
-In scope:
+`meow-bot` is a self-hosted GitHub App. Vulnerabilities in any of the components below are in scope:
 
-- The action manifest (`action.yml`) and shell scripts under `scripts/`.
-- Prompt templates under `prompts/` (prompt-injection vectors specific to the action's wrapping).
+- **Webhook receiver** (`src/meow/receiver/`) — HMAC validation, request handling, dispatch logic.
+- **Worker** (`src/meow/worker/`) — workflow and activity code, installation token minting and caching.
+- **Sandbox orchestration** (`src/meow/worker/sandbox/`) — how Mistral Vibe is invoked, what is mounted, what tools are allowed.
+- **GitHub App manifest** (`manifest/app-manifest.yml`) — requested permissions and subscribed events.
+- **Prompt templates** (`prompts/`) — prompt-injection vectors inherent to the templates we ship.
+- **Container images** (`Dockerfile`, `compose.yml`, `Caddyfile`) — base image choice, privilege model, mounted secrets.
 
-Out of scope:
+Issues out of scope (please report upstream):
 
-- Vulnerabilities in `mistral-vibe` itself — please report those upstream at <https://github.com/mistralai/mistral-vibe/security>.
-- Vulnerabilities in third-party GitHub Actions consumed by this action — report them to their respective maintainers.
+- [`mistralai/mistral-vibe`](https://github.com/mistralai/mistral-vibe/security) — the agent harness itself.
+- [Daytona](https://www.daytona.io/) — sandbox provider.
+- Mistral Workflows — managed control plane.
+
+See [SPEC.md §12](SPEC.md) for the full threat model (loop prevention, HMAC validation, sandbox isolation, token down-scoping, budgeting).
 
 ## Supported Versions
 
-While in `0.x`, only the **latest minor** is supported. Once `1.0.0` ships, the latest minor and the previous minor will both receive security fixes.
+While in `0.x`, only the **latest minor** receives security fixes. Once `1.0.0` ships, the latest minor and the previous minor will both be supported.
 
 | Version | Supported |
 |---------|-----------|
-| `0.x` (latest minor) | ✅ |
-| Older `0.x` | ❌ |
+| `0.x` (latest minor) | yes |
+| Older `0.x` | no |

@@ -7,3 +7,10 @@
 tmp/
 node_modules/
 *.bak
+
+# Self-host runtime artifacts
+secrets/
+data/
+*.pem
+.env
+!.env.example
