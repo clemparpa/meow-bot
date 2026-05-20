@@ -1,675 +1,572 @@
-# Spec — `ci-vibe`
+# Spec — `meow-bot`
 
-> GitHub Action OSS qui encapsule [Mistral Vibe](https://github.com/mistralai/mistral-vibe) en mode programmatique (`vibe --prompt`) pour automatiser code review, security review et triage d'issues dans n'importe quel repo GitHub.
+> Statut : draft v0.2 · à itérer
+> License : Apache-2.0
+> Modèle de distribution : **OSS self-host, BYOK**
 
-**Version de la spec :** 1.1 (pivot Python, intégration patterns OpenHands)
-**Statut :** À implémenter
-**Licence :** Apache-2.0 (alignée sur Mistral Vibe upstream)
-**Runtime :** Python 3.12 via `uv run --no-project`
+## 1. Objectif
 
----
+`meow-bot` est un **collaborateur agentique GitHub** qui se comporte comme un membre d'équipe humain : on le tag dans une **issue** ou une **PR**, il répond, code, review.
 
-## 1. Objectifs et non-objectifs
+Distribué comme un **projet OSS self-hostable**. Chaque utilisateur :
 
-### Objectifs
+- crée sa propre GitHub App via un **manifest** fourni (flow en 1 clic),
+- héberge le worker chez lui (`docker compose up`) sur n'importe quel VPS Docker-capable,
+- fournit ses propres clés (Mistral, GitHub App, Daytona) — **BYOK strict**.
 
-- Fournir **une action GitHub réutilisable** (`uses: clemparpa/ci-vibe@v1`) qui exécute Mistral Vibe en headless sur un repo cible.
-- Couvrir **trois modes natifs** : `review` (code review de PR), `security` (security review SAST-like de PR), `triage` (analyse d'issue à l'ouverture).
-- Permettre un **mode `custom`** avec prompt arbitraire pour des usages non prévus (doc, tests, refactor…).
-- Garantir un **niveau de sécurité acceptable par défaut** : permissions minimales, allowlist d'outils stricte, cap de coût, scrubbing des secrets.
-- Être **maintenable comme un projet OSS sérieux** : CI verte, dependabot, releases versionnées, doc utilisateur claire, security policy.
+Aucun mode SaaS pour l'instant. Aucune dépendance vers un service hébergé par les mainteneurs. Pas de quotas, pas de billing, pas d'analytics centralisée.
 
-### Non-objectifs
+### Principes
 
-- Pas d'orchestration multi-modèle dans v1 (Mistral uniquement via `MISTRAL_API_KEY`). Le support de providers custom via `config.toml` reste possible mais non documenté en v1.
-- Pas de support GitLab/Bitbucket dans v1 (uniquement GitHub Actions).
-- Pas de bridge avec Linear/Jira/Sentry dans v1 (Vibe en local le permet, on n'expose pas ces intégrations côté action).
-- Pas de fine-tuning ni d'évaluation/benchmark embarqué.
+- **OSS-first** : tout le code, prompts, manifest, compose sont dans le repo. Apache-2.0.
+- **BYOK** : zéro secret partagé entre instances. Chaque self-hoster paie ses appels.
+- **Self-host friendly** : quickstart visé `< 15 min` pour un dev qui sait lancer Docker sur un VPS.
+- **Durable** : un crash worker ou sandbox ne perd pas la tâche en cours (Mistral Workflows).
+- **Isolation forte** : tout code généré ou exécuté tourne dans un sandbox Daytona éphémère, jamais sur l'hôte.
+- **Read-only par défaut** : v0.1 ne modifie aucun repo. Les modes write arrivent plus tard, conditionnés à l'implémentation des budgets.
+- **Pas de boucle** : le bot ne se répond jamais à lui-même.
 
----
+### Non-objectifs (v0.x)
 
-## 2. Choix techniques structurants
+- GitLab/Bitbucket.
+- GitHub Enterprise Server (à garder en tête pour plus tard — variable d'env, mais pas de tests).
+- Multi-provider LLM (Mistral only).
+- Cron proactif / RepoScanner (reporté à v0.5).
+- Mode SaaS hébergé par les mainteneurs (peut-être un jour, sous-projet séparé).
+- Daytona self-host (managé only).
+- UI web, dashboard, métriques Prometheus.
 
-### Type d'action : **composite (orchestration YAML, logique en Python)**
+## 2. Stack
 
-- Pas Docker (cold start lent, complication multi-arch).
-- Pas JavaScript / TypeScript (Vibe est Python, écrire un wrapper Node ajoute une couche inutile).
-- **Composite YAML** pour l'orchestration GitHub (setup Python/uv, préflight, upload artifact).
-- **Module Python** (`ci_vibe`) pour la logique métier (diff sanitization, invocation Vibe, parsing output, post comment).
-- Pattern inspiré du plugin [`OpenHands/extensions/plugins/pr-review`](https://github.com/OpenHands/extensions/tree/main/plugins/pr-review) : `action.yml` minimal, le gros du code dans un script Python invoqué via `uv run`.
+| Couche | Choix | Pourquoi |
+|---|---|---|
+| Orchestration | `mistralai-workflows` (service managé Mistral) | Durabilité, cron futur, signals, retries. Le user a déjà un compte Mistral pour la clé LLM, le surcoût d'inscription est nul. |
+| Agent codeur | `mistral-vibe` OSS en mode `vibe.core.run_programmatic` | Harness mature, Apache-2.0, API Python programmatique. |
+| Sandbox | Daytona managé | Démarrage <100ms, snapshots, SDK Python. Self-host différé. |
+| Webhook receiver | FastAPI minimal | Mince, juste valider HMAC + `start_execution`. |
+| Worker | Process Python (`workflows.run_worker`) | Tourne 24/7, idle quand rien à faire. |
+| Auth GitHub | GitHub App + JWT → installation tokens | Standard. |
+| Hébergement | VPS Linux + Docker Compose | Simplicité, contrôle. |
+| LLM | Mistral Medium 3.5 (par défaut, surchargeable) | — |
+| Persistance | **Aucune en v0.1.** SQLite à partir de v0.2 pour les budgets. | YAGNI. |
+| Python tooling | `uv`, `ruff`, `ty`, `pytest` (stack Astral) | Cohérent, rapide, moderne. |
 
-### Stack
+## 3. Architecture
 
-- **Runtime** : `ubuntu-latest` (testé aussi sur `ubuntu-22.04` et `ubuntu-24.04`).
-- **Python** : 3.12 (cohérent avec `mistralai/mistral-vibe` et `OpenHands`). Installé via `actions/setup-python@v5`.
-- **Gestion deps** : `uv` (`astral-sh/setup-uv@v8`). Cache **désactivé par défaut** pour des raisons de sécurité (cf §7).
-- **API Vibe** : `from vibe.core import run_programmatic` (API publique, re-exportée explicitement dans `vibe/core/__init__.py`, listée dans `__all__`).
-- **Version Vibe** : pinnée par défaut (`mistral-vibe==2.9.6` au moment de la rédaction), surchargeable via input `vibe-version`.
-- **Wrapper interne** : module `ci_vibe` (4 sous-modules : `context`, `runner`, `parser`, `commenter`). Layout `src/ci_vibe/`.
-- **Tooling Python** : stack Astral cohérente — [`uv`](https://docs.astral.sh/uv/) (deps), [`ruff`](https://docs.astral.sh/ruff/) (lint + format), [`ty`](https://docs.astral.sh/ty/) (type-checking, en preview début 2026). Tests via `pytest`. Pas de `mypy`, pas de `black`, pas de `flake8`.
-- **Templates de prompts** : fichiers markdown dans `prompts/` (review.md, security.md, triage.md) chargés et interpolés via `string.Template` de la stdlib. Jinja2 différé à v0.4+ si la logique conditionnelle devient nécessaire.
-
-### Versionnage de l'action
-
-- Semver strict : `v1.2.3`.
-- **Tag majeur flottant** (`v1`) re-pointé à chaque release mineure/patch (convention GitHub Actions).
-- Les utilisateurs externes consomment `@v1` par défaut, ou `@v1.2.3` pour figer.
-
----
-
-## 3. Interface de l'action — `action.yml`
-
-```yaml
-name: 'ci-vibe'
-description: 'Run Mistral Vibe headless for code review, security review, or issue triage.'
-author: 'clemparpa'
-branding:
-  icon: 'cpu'
-  color: 'orange'
-
-inputs:
-  mistral-api-key:
-    description: 'Mistral API key. Required.'
-    required: true
-
-  mode:
-    description: 'review | security | triage | custom'
-    required: false
-    default: 'review'
-
-  prompt:
-    description: 'Custom prompt. Required when mode=custom, ignored otherwise unless `prompt-override` is true.'
-    required: false
-    default: ''
-
-  prompt-override:
-    description: 'If true, use `prompt` even for non-custom modes (appended to the template).'
-    required: false
-    default: 'false'
-
-  model:
-    description: 'Mistral model identifier (e.g. mistral-medium-3.5, devstral-2).'
-    required: false
-    default: 'mistral-medium-3.5'
-
-  max-turns:
-    description: 'Maximum agent turns. Hard cap to avoid runaway loops.'
-    required: false
-    default: '10'
-
-  max-price:
-    description: 'Maximum cost in USD. Vibe stops if exceeded.'
-    required: false
-    default: '1.00'
-
-  allowed-tools:
-    description: 'Comma-separated list of Vibe tools to enable. Defaults depend on mode (see README).'
-    required: false
-    default: ''
-
-  comment-pr:
-    description: 'Post result as a PR/issue comment.'
-    required: false
-    default: 'true'
-
-  upload-artifact:
-    description: 'Upload the raw output as a workflow artifact.'
-    required: false
-    default: 'true'
-
-  exclude-paths:
-    description: 'Comma-separated globs to exclude from analysis.'
-    required: false
-    default: ''
-
-  agents-md-path:
-    description: 'Path to AGENTS.md in the target repo. Copied to .vibe/AGENTS.md before running Vibe. Pass empty string to disable.'
-    required: false
-    default: 'AGENTS.md'
-
-  vibe-version:
-    description: 'Pin a specific Mistral Vibe version. Defaults to the version tested by this release.'
-    required: false
-    default: ''
-
-  github-token:
-    description: 'Token used to comment on PRs/issues. Defaults to github.token.'
-    required: false
-    default: ${{ github.token }}
-
-  fail-on-findings:
-    description: 'For mode=security: fail the job if any high-confidence finding is reported.'
-    required: false
-    default: 'false'
-
-  enable-uv-cache:
-    description: |
-      Enable setup-uv's GitHub Actions cache for Python dependencies.
-      Default is 'false' for security: a prompt-injected reviewer could write a malicious wheel
-      into a shared cache, which a subsequent higher-privilege workflow would then consume.
-      Only opt in when you control the runner environment (e.g. self-hosted, single-tenant).
-      Pattern adapted from OpenHands/extensions/plugins/pr-review.
-    required: false
-    default: 'false'
-
-outputs:
-  result-path:
-    description: 'Path to the markdown report produced by Vibe.'
-  findings-count:
-    description: 'Number of findings detected (security mode) or suggestions (review mode).'
-  cost-usd:
-    description: 'Approximate cost of the run in USD. **Returns 0 in v0.x**: `vibe --output json` does not expose `AgentStats.session_cost` (tracked upstream in mistralai/mistral-vibe). Output is kept for forward-compatibility.'
-
-runs:
-  using: 'composite'
-  steps:
-    # ... see §5 Implementation
+```mermaid
+flowchart LR
+    GH[GitHub] -->|webhook| RX[meow-receiver<br/>FastAPI]
+    RX -->|start_execution| WF[Mistral Workflows<br/>managed]
+    WF -.->|dispatch| W[meow-worker<br/>VPS du self-hoster]
+    W -->|REST/GraphQL| GH
+    W -->|spawn| DS[Daytona Sandbox<br/>éphémère]
+    DS -->|vibe.core.run_programmatic| DS
 ```
 
----
+Trois services à faire tourner soi-même (tout sur le même VPS) :
 
-## 4. Modes — comportement attendu
+1. **`receiver`** — FastAPI exposé en HTTPS, reçoit les webhooks GitHub.
+2. **`worker`** — process Python long-running, connecté au control plane Mistral Workflows.
+3. **`caddy`** — reverse proxy + TLS automatique (Let's Encrypt).
 
-### 4.1 `mode: review`
+Daytona et Mistral Workflows sont des **services managés externes** auxquels le self-hoster s'inscrit. Les sandboxes sont créés à la demande et détruits après usage.
 
-- **Déclencheur typique** : `pull_request` (`opened`, `synchronize`).
-- **Contexte injecté** : diff `origin/<base>...HEAD`, contenu des fichiers modifiés, `AGENTS.md`.
-- **Outils par défaut** : `read_file, grep, bash` (lecture seule sur git/diff).
-- **Sortie** : commentaire markdown structuré sur la PR avec sections `Bugs`, `Style`, `Performance`, `Suggestions`.
-- **Prompt template** : `prompts/review.md`.
+## 4. Onboarding self-hoster
 
-### 4.2 `mode: security`
+Cible : **un dev capable de lancer `docker compose up` sur un VPS, en moins de 15 minutes** d'effort.
 
-- **Déclencheur typique** : `pull_request`, idéalement gated par "Require approval for all external contributors".
-- **Contexte injecté** : diff complet + fichiers touchés, `AGENTS.md`, `exclude-paths` honoré.
-- **Outils par défaut** : `read_file, grep` (pas de `bash`, principe du moindre privilège).
-- **Sortie** : commentaire markdown avec findings notés par sévérité (`High` / `Medium` / `Low`, aligné sur `anthropics/claude-code-security-review`) et score de confiance 1–10. Findings filtrés à **≥ 8 de confiance** par défaut.
-- **Prompt template** : `prompts/security.md`. Adapté du prompt de `anthropics/claude-code-security-review` mais réécrit pour Vibe + Mistral (style de réponse, formats d'outputs).
-- **Si `fail-on-findings: true`** : exit code 1 si au moins un finding `High` est confirmé.
+### 4.1 Prérequis
 
-### 4.3 `mode: triage`
+- VPS Linux (Hetzner CX22 ~5€/mois suffit), Docker + Docker Compose installés.
+- Un nom de domaine pointant sur le VPS (pour HTTPS du webhook).
+- Comptes : **Mistral** (API key + Workflows), **Daytona** (API key).
 
-- **Déclencheur typique** : `issues` (`opened`).
-- **Contexte injecté** : titre et corps de l'issue, structure du repo (sortie `tree -L 2`), `AGENTS.md`.
-- **Outils par défaut** : `read_file, grep` (analyse sans modification).
-- **Sortie** : commentaire markdown avec hypothèse de root cause, fichiers probablement concernés, suggestion de labels (`bug`, `enhancement`, `priority/*`, `area/*`), estimation de complexité.
-- **Prompt template** : `prompts/triage.md`.
+### 4.2 Flow
 
-### 4.4 `mode: custom`
+1. **Cloner le repo** : `git clone https://github.com/clemparpa/meow-bot && cd meow-bot`.
+2. **Créer la GitHub App via manifest** : cliquer sur le lien `Create my Meow App` du README. GitHub redirige vers une page qui crée l'App à partir de [`manifest/app-manifest.yml`](manifest/app-manifest.yml) (permissions, events, webhook URL pré-remplie). En retour : `app_id`, `private_key.pem`, `webhook_secret`.
+3. **Renseigner `.env`** depuis `.env.example` :
+   - `MEOW_DOMAIN`, `GITHUB_APP_ID`, `GITHUB_WEBHOOK_SECRET`, `MISTRAL_API_KEY`, `DAYTONA_API_KEY`
+   - Déposer `github-app.pem` dans `./secrets/`.
+4. **Lancer** : `docker compose up -d`. Caddy obtient le certificat Let's Encrypt automatiquement.
+5. **Installer l'App sur ses repos** depuis l'UI GitHub.
+6. **Tester** : commenter `@<bot-login> review` sur une PR. Le bot répond.
 
-- L'utilisateur fournit `prompt:` directement. Les autres inputs (model, max-turns, max-price, allowed-tools) restent applicables.
-- Aucun template chargé. L'utilisateur est responsable du contenu.
+### 4.3 GitHub App Manifest
 
----
+Fichier [`manifest/app-manifest.yml`](manifest/app-manifest.yml) versionné dans le repo. Le README contient un lien du type :
 
-## 5. Structure du dépôt
-
-Le projet sera initialisé via `uv init --package --lib ci-vibe` (layout `src/`). L'arborescence cible :
-
-```text
-ci-vibe/
-├── action.yml                    # Manifest de l'action (composite, orchestration)
-├── pyproject.toml                # Métadonnées + deps dev (ruff, ty, pytest). mistral-vibe est injecté via `uv run --with`, pas en dep.
-├── uv.lock                       # Lockfile (commité)
-├── README.md                     # Doc utilisateur (voir §9)
-├── LICENSE                       # Apache-2.0
-├── CHANGELOG.md                  # Keep a Changelog format
-├── CONTRIBUTING.md
-├── CODE_OF_CONDUCT.md            # Contributor Covenant 3.0
-├── SECURITY.md                   # GitHub Private Vulnerability Reporting
-├── .markdownlint.json
-├── prompts/
-│   ├── review.md
-│   ├── security.md               # v0.2+
-│   └── triage.md                 # v0.3+
-├── src/
-│   └── ci_vibe/
-│       ├── __init__.py
-│       ├── __main__.py           # entrée: `python -m ci_vibe`
-│       ├── config.py             # parsing/validation des env vars (inputs action)
-│       ├── context.py            # diff + sanitization + AGENTS.md
-│       ├── runner.py             # invocation `vibe.core.run_programmatic`
-│       ├── parser.py             # extraction findings, écriture GITHUB_OUTPUT
-│       ├── commenter.py          # scrubbing secrets + gh pr comment
-│       └── templates.py          # chargement et interpolation prompts/
-├── examples/                     # Workflows clés-en-main à recopier
-│   ├── pr-review.yml
-│   ├── security-review.yml       # v0.2+
-│   ├── issue-triage.yml          # v0.3+
-│   └── custom-prompt.yml         # v0.4+
-├── .github/
-│   ├── CODEOWNERS
-│   ├── workflows/
-│   │   ├── ci.yml                # ruff + ty + pytest + actionlint + markdownlint
-│   │   ├── dogfood.yml           # v0.2+ — l'action s'auto-applique sur ses PRs
-│   │   ├── release.yml           # v0.5+ — tag + release notes auto
-│   │   └── major-tag.yml         # v1.0+ — repoint v1 → vX.Y.Z après release
-│   ├── dependabot.yml
-│   ├── ISSUE_TEMPLATE/
-│   │   ├── bug_report.yml
-│   │   ├── feature_request.yml
-│   │   └── config.yml            # Renvoie SECURITY.md pour les bugs sécu
-│   └── pull_request_template.md
-└── tests/
-    ├── conftest.py
-    ├── fixtures/                 # diffs/issues de test, vibe.json factices
-    ├── test_context.py
-    ├── test_parser.py
-    ├── test_commenter.py
-    └── test_runner.py            # avec mocks de vibe.core.run_programmatic
+```
+https://github.com/settings/apps/new?manifest=<base64(JSON du manifest)>
 ```
 
-**Décision : pas de pyproject.toml `[project.dependencies]` pour `mistral-vibe`.** L'action installe Vibe via `uv run --no-project --with "mistral-vibe==${VIBE_VERSION}" --with "${{ github.action_path }}" python -m ci_vibe`. Cela permet :
+Détails du flow : [GitHub docs — Registering a GitHub App from a manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest).
 
-1. Versioning indépendant de Vibe (input `vibe-version` override) sans toucher au lockfile.
-2. Pas de conflit de résolution si le repo cible a aussi un environnement Python.
-3. Le pyproject.toml reste léger : il décrit le module `ci_vibe` (importable) + les deps de dev (`ruff`, `ty`, `pytest`).
+**Le slug GitHub App est choisi par le self-hoster** (pas par nous) — il peut nommer son instance comme il veut. Par convention, on suggère `meow-bot` ou `<orgname>-meow`. Le `BOT_LOGIN` est lu depuis la GitHub API au démarrage (`GET /app`), pas hardcodé.
 
-Pattern repris de [`OpenHands/extensions`](https://github.com/OpenHands/extensions/blob/main/plugins/pr-review/action.yml) qui fait `uv run --no-project --with openhands-sdk --with openhands-tools python script.py`.
+## 5. GitHub App — permissions & events v0.1
 
----
+Profil minimal pour `REVIEW` read-only.
 
-## 6. Implémentation — détails clés
+| Resource | Accès |
+|---|---|
+| Contents | **Read** (clone repo pour diff) |
+| Issues | Read & write (commenter) |
+| Pull requests | Read & write (commenter) |
+| Metadata | Read (obligatoire) |
 
-### 6.1 Orchestration `action.yml` (composite minimal)
+**Subscribed events :**
 
-L'action.yml ne contient **que** l'orchestration : setup Python/uv, validation des inputs, préflight permission check, invocation Python, upload artifact. Aucune logique métier.
+- `issue_comment` (pour détecter `@bot review`)
+- `pull_request` (pour `opened`/`synchronize` futurs déclencheurs auto)
+- `installation`, `installation_repositories` (lifecycle)
 
-```yaml
-runs:
-  using: composite
-  steps:
-    - uses: actions/setup-python@v5
-      with: { python-version: '3.12' }
+> **v0.2+ ajoutera** : `Contents: write` pour CODE_REQUEST, événements `discussion*`, `pull_request_review*`.
 
-    - uses: astral-sh/setup-uv@v8
-      with: { enable-cache: ${{ inputs.enable-uv-cache }} }
+## 6. Webhook Receiver
 
-    - name: Preflight permission check
-      if: github.event_name == 'pull_request' && inputs.comment-pr == 'true'
-      shell: bash
-      env: { GH_TOKEN: ${{ inputs.github-token }} }
-      run: |
-        # Crée puis supprime un commentaire vide pour valider que le token
-        # a `pull-requests: write`. Économise un appel LLM si misconfig.
-        if ! gh pr comment "${{ github.event.pull_request.number }}" \
-             --body '<!-- ci-vibe preflight -->' >/dev/null; then
-          echo "::error::github-token lacks pull-requests: write permission"
-          exit 1
-        fi
-
-    - name: Run ci-vibe
-      shell: bash
-      env:
-        MISTRAL_API_KEY: ${{ inputs.mistral-api-key }}
-        GH_TOKEN: ${{ inputs.github-token }}
-        CI_VIBE_MODE: ${{ inputs.mode }}
-        CI_VIBE_MODEL: ${{ inputs.model }}
-        CI_VIBE_MAX_TURNS: ${{ inputs.max-turns }}
-        CI_VIBE_MAX_PRICE: ${{ inputs.max-price }}
-        # ... (toutes les autres inputs en CI_VIBE_*)
-      run: |
-        VIBE_PIN="${{ inputs.vibe-version }}"
-        VIBE_PIN="${VIBE_PIN:-2.9.6}"
-        uv run --no-project \
-          --with "mistral-vibe==${VIBE_PIN}" \
-          --with "${{ github.action_path }}" \
-          python -m ci_vibe
-
-    - uses: actions/upload-artifact@v7
-      if: inputs.upload-artifact == 'true' && always()
-      with:
-        name: ci-vibe-output-${{ github.run_id }}
-        path: |
-          ${{ runner.temp }}/report.md
-          ${{ runner.temp }}/vibe.json
-```
-
-### 6.2 Module Python `ci_vibe` (cœur de la logique)
-
-Entrée : `python -m ci_vibe` → `src/ci_vibe/__main__.py` :
+Rôle : **recevoir, valider, dispatcher**. Aucune logique métier.
 
 ```python
-# src/ci_vibe/__main__.py (pseudo-code)
-from ci_vibe.config import load_config_from_env
-from ci_vibe.context import prepare_context
-from ci_vibe.runner import run_vibe
-from ci_vibe.parser import write_outputs
-from ci_vibe.commenter import post_pr_comment
+@app.post("/gh/webhook")
+async def webhook(request: Request):
+    body = await request.body()
+    verify_hmac(request.headers["X-Hub-Signature-256"], body, WEBHOOK_SECRET)
+    event = request.headers["X-GitHub-Event"]
+    payload = json.loads(body)
 
-def main() -> int:
-    cfg = load_config_from_env()  # parse les CI_VIBE_* env vars, valide
-    if cfg.mode != "review":
-        print(f"::error::mode '{cfg.mode}' not implemented in v0.1")
-        return 2
+    if payload.get("sender", {}).get("login") == bot_login():
+        return {"skipped": "self"}
+    if event not in HANDLED_EVENTS:
+        return {"skipped": "event"}
 
-    ctx = prepare_context(cfg)         # diff, sanitization, AGENTS.md → .vibe/
-    result = run_vibe(cfg, ctx)        # vibe.core.run_programmatic(...)
-    findings = write_outputs(result)   # parse report.md + écrit GITHUB_OUTPUT
-    if cfg.comment_pr and cfg.pr_number:
-        post_pr_comment(cfg, result.report_path)
-    return 0
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    workflow_id = build_idempotent_id(event, payload)
+    await mistral.workflows.executions.start(
+        name="github_event_handler",
+        id=workflow_id,
+        input={"event": event, "payload": payload},
+    )
+    return {"queued": True}
 ```
 
-Pattern d'invocation Vibe dans `runner.py` :
+Doit répondre **<10s** sous peine de timeout GitHub.
+
+**`HANDLED_EVENTS` en v0.1** : `issue_comment`, `installation`, `installation_repositories`.
+
+## 7. Worker
+
+Process Python qui appelle `workflows.run_worker(...)`.
 
 ```python
-from vibe.core import run_programmatic
-from vibe.core.config import VibeConfig
-from vibe.core.output import OutputFormat
-
-def run_vibe(cfg: Config, ctx: Context) -> RunResult:
-    vibe_cfg = VibeConfig(
-        api_key=cfg.mistral_api_key,
-        model=cfg.model,
-        # ... mapping cfg → VibeConfig
+async def main():
+    await workflows.run_worker(
+        workflows=[GithubEventHandler, InstallLifecycle],
+        activities=[
+            fetch_pr_context,
+            run_review_in_sandbox,
+            post_pr_comment,
+            register_installation,
+        ],
     )
-    prompt = render_template(cfg.mode, ctx)
-    json_str = run_programmatic(
-        config=vibe_cfg,
-        prompt=prompt,
-        max_turns=cfg.max_turns,
-        max_price=cfg.max_price,
-        output_format=OutputFormat.JSON,
-    )
-    # json_str est une string JSON (LLMMessage[]); on l'écrit sur disque
-    # pour l'artefact debug. Le rapport markdown est écrit par Vibe via le prompt.
-    (cfg.runner_temp / "vibe.json").write_text(json_str or "[]")
-    return RunResult(report_path=cfg.runner_temp / "report.md", messages_json=json_str)
 ```
 
-Détails à finaliser à l'implémentation :
+Scaling : 1 replica suffit pour un self-host individuel. À terme, N replicas se partagent la charge via le control plane Mistral (Temporal dessous).
 
-- **Signature exacte de `VibeConfig`** : à confirmer avec un `inspect` ou un coup d'œil au code Vibe pendant le scaffold. Deepwiki donne la signature de `run_programmatic` mais pas la structure complète de `VibeConfig`.
-- **Sanitisation du diff** (`context.py`) : Python `re.sub` pour HTML comments et caractères invisibles (cf §7), bien plus lisible que le `perl -0777 -pe` initial.
-- **Scrubbing des secrets** (`commenter.py`) : `re.sub` sur `MISTRAL_API_KEY` (exact match) + patterns GH tokens.
+## 8. Workflows et activities — v0.1
 
-### 6.3 Convention des templates et extraction des métadonnées
+### 8.1 `GithubEventHandler`
 
-Chaque template termine par une instruction du type :
+Seul intent v0.1 : **`MENTION_REVIEW`** déclenché par un commentaire de la forme `@<bot-login> review` sur une **PR** (issue commentée qui a un `pull_request` field).
 
-> Save the final markdown report to `$RUNNER_TEMP/report.md`. At the end of the file, append a single line `<!-- findings:N -->` where N is the number of findings.
+```
+input: { event: "issue_comment", payload: {...} }
 
-`parser.py` extrait :
+steps:
+  1. intent = parse_mention(payload.comment.body)
+       → MENTION_REVIEW si match `@<bot-login>\s+review\b`
+       → IGNORE sinon
+  2. si IGNORE → exit
+  3. ctx = fetch_pr_context(repo, pr_number, installation_id)
+       → diff, fichiers modifiés, .meow.yml du repo cible
+  4. result = run_review_in_sandbox(repo, ctx, cfg)
+       → spawn Daytona, clone repo (read-only token), lance vibe en mode read-only
+       → renvoie un rapport markdown
+  5. post_pr_comment(repo, pr_number, result.report)
+```
 
-- **`findings-count`** depuis le marqueur HTML en fin de rapport (`<!-- findings:N -->`). C'est le LLM qui connaît la sémantique « finding » selon le mode, donc impossible de l'extraire autrement.
-- **`cost-usd`** : **non disponible en v0.x**. Vérification deepwiki : `run_programmatic` retourne `str | None` (le JSON sérialisé des `LLMMessage`), pas l'objet `AgentStats` (où vit `session_cost`). On retourne `0` et on documente la limitation. Issue upstream à ouvrir sur `mistralai/mistral-vibe` pour soit (a) exposer `AgentStats` dans le `RunResult`, soit (b) inclure les métadonnées dans le JSON `output_format`.
+**Pas de classifier LLM en v0.1** : un simple regex sur le corps du commentaire suffit pour 1 seul intent. Le classifier (Mistral Small) sera introduit en v0.2 quand on aura ≥2 intents conversationnels.
 
-Le fichier `vibe.json` brut est uploadé en artefact si `upload-artifact: true`, pour debug (post-mortem des messages assistant).
+**Idempotence** : `workflow_id = f"issue_comment-{repo}-{comment_id}"`. Un retry GitHub réutilise le même ID, Mistral Workflows déduplique.
 
-### 6.4 Gestion des permissions et secrets
+### 8.2 `InstallLifecycle`
 
-- L'action **ne demande jamais** `contents: write`. Toute modification de code est hors scope v1.
-- `github-token` n'est utilisé que pour `gh pr comment` / `gh issue comment`. Permission requise : `pull-requests: write` ou `issues: write` selon le mode.
-- **Préflight permission check** : avant d'invoquer le LLM, l'action poste un commentaire factice puis le supprime, pour vérifier que le token a bien la permission requise. Fail-fast : si misconfig, on n'a pas dépensé de tokens Mistral.
-- `MISTRAL_API_KEY` est passé en `env:` au step Python, **jamais en argument CLI** (évite le leak dans les logs). Dans le code Python il vit dans `Config.mistral_api_key`, jamais loggé.
-- **Scrubbing** : avant `gh ... comment`, le rapport est filtré via `re.sub` pour retirer toute occurrence du `MISTRAL_API_KEY` exact + patterns GitHub tokens (`ghp_*`, `gho_*`, `ghs_*`, `ghr_*`, `github_pat_*`).
-- **`persist-credentials: false`** recommandé sur le `actions/checkout` du repo cible (documenté dans le README quickstart) — empêche que le token GH leak via `git push` accidentel par Vibe.
+Déclenché sur `installation.created` / `installation_repositories.added` / `installation.deleted`.
 
-### 6.5 Convention `AGENTS.md`
+v0.1 : se contente de **logger** l'événement dans le journal d'audit (cf §13). Pas de persistance (la liste des installations est requérable à la volée via `GET /app/installations`).
 
-Mistral Vibe charge ses instructions agent depuis `.vibe/AGENTS.md` (projet) ou `~/.vibe/AGENTS.md` (user). Pour respecter la convention `AGENTS.md` exposée par l'écosystème (fichier à la racine du repo cible), `context.py` **copie** le fichier indiqué par `agents-md-path` (défaut : `AGENTS.md` à la racine du repo cible) vers `${GITHUB_WORKSPACE}/.vibe/AGENTS.md` avant l'invocation de Vibe.
+v0.2+ : créera les schedules `RepoScanner` (cron proactif) par installation.
 
-- Si le fichier source n'existe pas, l'étape est skip silencieusement (pas d'erreur).
-- Le fichier n'est jamais modifié dans le repo cible (copie unidirectionnelle vers `.vibe/`).
-- L'utilisateur peut désactiver le mécanisme en passant `agents-md-path: ''`.
+### 8.3 Activities
 
-### 6.6 Cache `uv` partagé — désactivé par défaut
+| Activity | Effet | Retries |
+|---|---|---|
+| `fetch_pr_context` | Charge PR + diff + `.meow.yml` via PyGithub | 3, exp backoff |
+| `run_review_in_sandbox` | **Spawn Daytona + clone + `vibe.core.run_programmatic` read-only + capture rapport** | 1, non-idempotent |
+| `post_pr_comment` | POST commentaire via GitHub API (scrubbing secrets en amont) | 5, idempotence par hash du body |
+| `register_installation` | Log dans `events.jsonl` | 3 |
 
-`setup-uv@v8` propose un `enable-cache` qui partage le cache `~/.cache/uv` entre workflows. Risque identifié dans [`OpenHands/extensions/plugins/pr-review`](https://github.com/OpenHands/extensions/blob/main/plugins/pr-review/action.yml) :
+### 8.4 Activity clé : `run_review_in_sandbox`
 
-> *« Prompt-injected reviewer could write a malicious wheel into the shared cache; subsequent higher-privilege workflow hits poisoned cache. »*
+```python
+@workflows.activity.defn
+async def run_review_in_sandbox(
+    repo: str,
+    pr_number: int,
+    installation_id: int,
+    cfg: RepoConfig,  # vient de .meow.yml
+) -> ReviewResult:
+    token = mint_installation_token(installation_id, repo, permissions={"contents": "read"})
+    prompt = render_template("review.md", pr_diff=cfg.diff, agents_md=cfg.agents_md)
 
-Mitigation imposée :
+    async with daytona.create(snapshot="meow-base") as sandbox:
+        await sandbox.exec(f"git clone https://x-access-token:{token}@github.com/{repo} /work")
+        await sandbox.exec(f"gh pr checkout {pr_number}", cwd="/work")
+        result = await sandbox.run_python(
+            "from vibe.core import run_programmatic; "
+            "from vibe.core.config import VibeConfig; "
+            "print(run_programmatic(config=VibeConfig(...), prompt=PROMPT, "
+            f"max_turns={cfg.max_turns}, max_price={cfg.max_price}, "
+            f"allowed_tools={REVIEW_PROFILE.tools}))"
+        )
+    return ReviewResult.parse(result.stdout)
+```
 
-- `enable-uv-cache` input expose le choix, **défaut `false`**.
-- Documentation explicite : opt-in uniquement pour runners self-hosted single-tenant.
+`start_to_close_timeout` côté workflow : **35 min**. **Pas de retry automatique**.
 
----
+### 8.5 Snapshot Daytona `meow-base`
 
-## 7. Modèle de sécurité
+Pré-construit, contient :
 
-### 7.1 Menaces considérées
+- Ubuntu + Python 3.12 + git + `gh` CLI
+- `mistral-vibe` installé en venv système
+- Pré-configuration `.vibe/` minimale
 
-1. **Prompt injection via PR fork** — un contributeur externe place des instructions cachées dans le diff ou la description.
-2. **Exfiltration via outils** — Vibe exécute `bash` et fait sortir des secrets via curl.
-3. **Coût runaway** — boucle infinie ou prompt malicieux qui crame le budget API.
-4. **Modification non-désirée** — Vibe écrit dans le repo en accept-edits.
-5. **Cache poisoning via `uv` partagé** — un prompt-injected reviewer place une wheel malicieuse dans le cache, qu'un workflow plus privilégié consomme ensuite. Identifié par OpenHands.
-6. **Token leak via `git push`** — Vibe pousse accidentellement avec le token de l'action persistant dans la config git du checkout.
+Auto-pause à **30 secondes** (vs 15 min default).
 
-### 7.2 Mitigations imposées par défaut
+## 9. Profils d'intent — sécurité par action
+
+Chaque intent a un **profil** qui contraint les outils Vibe activés. Pour v0.1, un seul profil :
+
+| Profil | Intent | Allowed tools | Write au repo ? |
+|---|---|---|---|
+| `READ_ONLY` | `MENTION_REVIEW` | `read_file`, `grep`, `bash` (read-only) | Non — commentaire de PR uniquement |
+
+Profils prévus pour les versions suivantes (non implémentés en v0.1) :
+
+| Profil | Intent futur | Allowed tools | Write au repo ? |
+|---|---|---|---|
+| `WRITE_BRANCH` | `CODE_REQUEST` | `read_file`, `write_file`, `grep`, `bash` | Oui, sur une **nouvelle branche** uniquement, jamais sur la default. PR ouverte pour review humaine. |
+| `SECURITY_SAST` | `SECURITY_REVIEW` | `read_file`, `grep` (pas de `bash`) | Non |
+
+Le profil est **hardcodé par intent** dans le code, pas configurable côté repo (sécurité par construction).
+
+## 10. Configuration repo cible : `.meow.yml`
+
+Fichier optionnel à la racine du repo cible. Tous les champs ont un default sain. **Aucune configuration n'est requise pour utiliser le bot.**
+
+```yaml
+# .meow.yml — configuration meow-bot (v0.1)
+
+# Modèle Mistral utilisé pour les invocations Vibe sur ce repo
+model: mistral-medium-3.5
+
+# Garde-fous coût/turn par invocation
+max_turns: 15
+max_price_usd: 0.50
+
+# Langue de réponse du bot. "auto" → détectée depuis le thread.
+language: auto
+
+# Chemin vers AGENTS.md à injecter dans le contexte Vibe (cf convention agents.md).
+# Empty = désactivé.
+agents_md_path: AGENTS.md
+
+# Globs exclus de l'analyse de diff (review mode).
+exclude_paths:
+  - "vendor/**"
+  - "**/*.lock"
+  - "**/generated/**"
+```
+
+**Philosophie** : config minimale, defaults sains. On ajoute des clés au fil des modes (`review.tone`, `triage.label_suggestions`, etc.). Toute clé inconnue → warning au démarrage du workflow, pas d'erreur fatale.
+
+Parsing : pydantic, validation stricte des types. Chargé depuis la branche **default** du repo (pas de la PR, pour éviter qu'un PR malveillant change la config qui s'applique à elle-même).
+
+## 11. Authentification GitHub App
+
+Flow standard à trois étages :
+
+1. **App Private Key** — montée depuis `/secrets/github-app.pem` (read-only) dans le worker.
+2. **JWT** signé avec la private key (10 min TTL).
+3. **Installation token** obtenu en échangeant le JWT, scopé à l'installation cible (1h TTL).
+
+```python
+def installation_token(installation_id: int, permissions: dict | None = None) -> str:
+    cached = _cache.get((installation_id, freeze(permissions)))
+    if cached and cached.expires_at > now() + 60:
+        return cached.token
+    jwt = make_jwt(app_id=APP_ID, private_key=APP_KEY, ttl=600)
+    resp = requests.post(
+        f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+        headers={"Authorization": f"Bearer {jwt}"},
+        json={"permissions": permissions} if permissions else {},
+    )
+    token, exp = resp.json()["token"], resp.json()["expires_at"]
+    _cache[(installation_id, freeze(permissions))] = CachedToken(token, parse_dt(exp))
+    return token
+```
+
+**Best practice** : pour `run_review_in_sandbox`, on **down-scope** le token à `{"contents": "read"}` quand on appelle `access_tokens`. Le sandbox ne peut alors ni commenter ni push, même si Vibe est compromis par prompt injection.
+
+## 12. Sécurité
+
+### 12.1 Loop prevention
+
+- Filtre `sender.login == bot_login()` au niveau du receiver, **avant** d'invoquer le workflow.
+- v0.2+ : budget par thread (max 5 réponses/24h dans un même thread) en SQLite.
+
+### 12.2 Validation webhook
+
+HMAC-SHA256 sur le body avec `GITHUB_WEBHOOK_SECRET`, comparaison constante-time (`hmac.compare_digest`). Rejet 401 sinon.
+
+### 12.3 Sandbox
+
+- Pas de mounting de secrets de l'hôte dans le sandbox.
+- Seul un **installation token down-scopé** (`contents: read` en v0.1) est passé, valable 1h.
+- `max_turns` et `max_price` toujours fournis à `run_programmatic`.
+- v0.x+ : whitelist d'égress (registries de packages + `api.github.com` + `api.mistral.ai`).
+
+### 12.4 Modèle de menace v0.1
+
+Surface réduite parce que tout est read-only :
 
 | Menace | Mitigation |
-|--------|------------|
-| Prompt injection | Sanitisation du diff dans `context.py` (`re.sub` sur HTML comments + caractères Unicode invisibles : zero-width, bidi overrides, BOM). Documentation explicite recommandant `Require approval for all external contributors`. |
-| Exfiltration | Liste d'outils stricte (`read_file,grep,bash` pour review ; `bash` exclu en `security`). Jamais de wildcard. |
-| Cost runaway | `max-turns` et `max-price` cappés (default 10 / $1). Préflight permission check pour ne pas brûler de tokens en cas de misconfig. |
-| Modification | v1 = lecture seule, `write_file` absent des defaults. Si l'utilisateur force `allowed-tools: ...,write_file`, doc explicite que ce n'est plus une action de review. |
-| Cache poisoning | `enable-uv-cache: false` par défaut (cf §6.6). Opt-in uniquement sur runner self-hosted single-tenant. |
-| Token leak | Documentation README recommande `persist-credentials: false` sur `actions/checkout` du repo cible. Préflight check avec un commentaire factice = no-op visible plutôt que tentative de write opaque. |
+|---|---|
+| Prompt injection via diff PR fork | (a) Read-only ; le bot peut au pire poster un commentaire bizarre. (b) Sanitisation Unicode du diff (zero-width, bidi overrides, BOM) côté `fetch_pr_context`. |
+| Exfiltration via `bash` | Sandbox Daytona isolé, pas de secrets de l'hôte montés, token GH scopé `contents: read`. Egress whitelist v0.x+. |
+| Burn de tokens Mistral du self-hoster | `max_turns` + `max_price` cappés (defaults : 15 turns / $0.50). Budgets par thread arrivent v0.2. |
+| Loop bot↔bot | Filtre `sender.login` au receiver. |
+| Webhook spoofing | HMAC obligatoire. |
 
-### 7.3 Recommandations utilisateur (à mettre dans README)
+### 12.5 Lifting des modes write (v0.2+)
 
-- Activer "Require approval for all external contributors" dans Settings → Actions.
-- Permissions du workflow au minimum : `contents: read`, `pull-requests: write`.
-- Clé API Mistral dédiée à la CI, avec usage cap dans la console.
-- `persist-credentials: false` sur `actions/checkout` du repo cible.
-- Garder `enable-uv-cache: false` (default) sauf si runner single-tenant.
-- Combiner avec un outil StepSecurity (`harden-runner`) si déploiement entreprise.
+Les modes write (`CODE_REQUEST`) ne sont **pas** introduits sans :
+- Budgets par thread implémentés (anti-spam).
+- Token down-scopé à `contents: write` seulement sur la nouvelle branche.
+- Recommandation explicite dans le README : **activer la branch protection sur la default branch**.
+- Sanitization étendue (commit messages, noms de branches).
 
----
+## 13. Observabilité
 
-## 8. Maintenance OSS — fichiers et processus
+### 13.1 Logs structurés stdout
 
-### 8.1 Fichiers obligatoires v1.0
+Tous les services émettent du JSON ligne-par-ligne sur stdout. Visualisation via `docker compose logs -f`.
 
-- **`LICENSE`** : Apache-2.0.
-- **`README.md`** : voir §9 pour le contenu attendu.
-- **`CHANGELOG.md`** : format [Keep a Changelog](https://keepachangelog.com/), section `## [Unreleased]` toujours présente.
-- **`CONTRIBUTING.md`** : setup local (uv, ruff, ty, pytest), conventions de commit (Conventional Commits), processus de PR, comment lancer les tests.
-- **`CODE_OF_CONDUCT.md`** : Contributor Covenant 3.0.
-- **`SECURITY.md`** : instructions pour utiliser le **GitHub Private Vulnerability Reporting** natif (onglet *Security* → *Report a vulnerability*). Délai de réponse cible : 7 jours. Pas d'email exposé, pas de GPG key requise.
-- **`CODEOWNERS`** : `.github/CODEOWNERS` avec au moins un mainteneur sur chaque chemin sensible (`action.yml`, `src/ci_vibe/`, `prompts/`).
-
-### 8.2 Templates GitHub
-
-- `.github/ISSUE_TEMPLATE/bug_report.yml` (formulaire structuré : version, mode utilisé, workflow snippet, logs).
-- `.github/ISSUE_TEMPLATE/feature_request.yml`.
-- `.github/ISSUE_TEMPLATE/config.yml` : `blank_issues_enabled: false`, contact link vers `SECURITY.md` pour les vulnerabilities.
-- `.github/pull_request_template.md` : checklist (tests passent, CHANGELOG mis à jour, doc mise à jour).
-
-### 8.3 Branch protection sur `main`
-
-- Required reviews : 1 mainteneur.
-- Required status checks : `ci`, `dogfood`, `actionlint`.
-- Linear history requise.
-- Signed commits requis pour les mainteneurs (commit signing setup dans `CONTRIBUTING.md`).
-
----
-
-## 9. README — sections obligatoires
-
-1. **Badges** : CI status, latest release, marketplace, license.
-2. **TL;DR** : un workflow de 10 lignes qui marche.
-3. **Quickstart** : prérequis (clé API), copy-paste d'un workflow pour `review`.
-4. **Usage par mode** : un exemple complet pour `review`, `security`, `triage`, `custom`.
-5. **Reference complète des inputs/outputs** : tableau avec defaults.
-6. **Modèles supportés** : liste, recommandations (Medium 3.5 par défaut, Devstral pour cost-conscious).
-7. **AGENTS.md** : comment l'utiliser pour customiser le style/les conventions.
-8. **Sécurité** : pointage vers `SECURITY.md`, recommandations clés.
-9. **Coût** : estimation par run selon mode (review ~ $0.10–0.30, security ~ $0.50–1.50).
-10. **FAQ / Troubleshooting**.
-11. **Comparaison avec `anthropics/claude-code-action`** : tableau honnête (non, ce n'est pas le même modèle, oui c'est moins cher, etc.).
-12. **Contributing** : lien vers `CONTRIBUTING.md`.
-13. **License**.
-
----
-
-## 10. CI/CD du repo
-
-### 10.1 `ci.yml` — sur push et PR
-
-Jobs (en parallèle quand possible) :
-
-- **`lint`** : `uv run ruff check .` + `uv run ruff format --check .` (lint + format check, stack Astral).
-- **`typecheck`** : `uv run ty check` (type-checker Astral, preview en 2026 — fallback `--exit-zero` possible si trop instable, à juger pendant l'implémentation).
-- **`test`** : `uv run pytest` sur `tests/`. Matrice Python : `3.12`, `3.13` si stable.
-- **`action-lint`** : [`actionlint`](https://github.com/rhysd/actionlint) sur `action.yml` et tous les workflows.
-- **`md-lint`** : `markdownlint-cli2` sur `*.md` et `prompts/*.md`.
-- Matrice OS : `ubuntu-22.04`, `ubuntu-24.04` (Python est cross-platform donc on couvre les deux pour détecter les régressions runner).
-
-**Outils retirés** vs. spec d'origine :
-
-- `shellcheck`, `shfmt`, `bats-core` : plus pertinents — aucun script bash custom (les quelques lignes inline dans `action.yml` sont triviales et couvertes par `actionlint`).
-- `mypy`, `black`, `flake8` : remplacés par `ty` et `ruff`.
-
-### 10.2 `dogfood.yml` — l'action s'auto-applique
-
-- Sur chaque PR du repo, exécute l'action en mode `review` sur la PR elle-même.
-- Sur chaque issue ouverte, exécute `triage`.
-- Validation immédiate qu'une régression est détectable.
-- Requiert un secret `MISTRAL_API_KEY` au niveau du repo (compte dédié, faible budget).
-
-### 10.3 `release.yml` — sur push de tag `v*.*.*`
-
-- Génère les release notes via `release-drafter` ou Conventional Commits.
-- Publie la release GitHub.
-- Met à jour le marketplace (auto si action publiée).
-- Trigger `major-tag.yml`.
-
-### 10.4 `major-tag.yml`
-
-- Force-push de `v1` vers le tag annotated qui vient d'être publié (si la version est `v1.x.y`).
-- Pareil pour `v2` à terme.
-
----
-
-## 11. Dependabot
-
-`.github/dependabot.yml` :
-
-```yaml
-version: 2
-updates:
-  # Actions GitHub utilisées dans nos workflows internes
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "github-actions"
-    commit-message:
-      prefix: "chore(deps)"
-
-  # Actions GitHub utilisées dans les workflows d'exemples
-  - package-ecosystem: "github-actions"
-    directory: "/examples"
-    schedule:
-      interval: "weekly"
-    labels:
-      - "dependencies"
-      - "examples"
-
-  # Dev deps Python (ruff, ty, pytest) — déclarées dans pyproject.toml
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    labels:
-      - "dependencies"
-      - "python"
+```json
+{"ts":"2026-05-20T10:11:12Z","svc":"receiver","level":"info","event":"webhook.received","gh_event":"issue_comment","action":"created","repo":"foo/bar","delivery":"abcd-1234"}
 ```
 
-**Note Dependabot + uv** : Dependabot `pip` lit `[project.dependencies]` et `[project.optional-dependencies]` du `pyproject.toml`. Pour que les dev deps soient bumpées automatiquement, on les déclare en `[project.optional-dependencies.dev]` (PEP 621, supporté) plutôt qu'en `[dependency-groups]` (PEP 735, non supporté par Dependabot début 2026). À évaluer pendant l'init.
+### 13.2 Journal d'audit append-only
 
-**Particularité importante** : `mistral-vibe` lui-même n'est **pas** géré par Dependabot (il est pinné dans `action.yml` en argument de `uv run --with`, pas dans `pyproject.toml`). Il faut donc un job **`update-vibe-version.yml`** dédié (v0.2+) :
+Fichier `./data/events.jsonl` monté en volume dans le worker. **Append-only**, jamais rotaté par l'app (à la charge du self-hoster).
 
-- Tourne chaque lundi (`schedule: cron`).
-- Query l'API GitHub releases de `mistralai/mistral-vibe` pour la dernière version stable.
-- Si différente du pin par défaut dans `action.yml`, ouvre une PR.
-- La PR déclenche `dogfood.yml`, qui valide que la nouvelle version ne casse rien.
+Schéma :
+
+```json
+{"ts":"...","installation_id":12345,"repo":"foo/bar","actor":"alice","intent":"MENTION_REVIEW","pr":42,"turns":8,"cost_usd":0.12,"status":"ok"}
+```
+
+Un event par invocation terminée (succès ou échec). Permet de relire l'historique en local sans dépendre de Mistral Studio. Suffit aussi pour les budgets en v0.2 (read-back du fichier au démarrage, puis SQLite quand le volume devient gênant).
+
+### 13.3 Mistral Studio
+
+Le control plane Mistral Workflows fournit déjà l'historique détaillé des exécutions, le replay, les retries. Pas de surcouche à construire.
+
+## 14. Comportement quand `max_price` ou `max_turns` est atteint
+
+Vibe s'arrête. L'activity `run_review_in_sandbox` **rapporte ce qui a été produit jusqu'ici** (rapport partiel) + un flag `terminated_early: true` avec la raison.
+
+`post_pr_comment` ajoute alors un **header explicite** au début du commentaire :
+
+```markdown
+> Note : analyse interrompue (budget atteint : max_price=$0.50). Le rapport ci-dessous est partiel.
+```
+
+Pas d'erreur silencieuse, pas de retry coûteux.
+
+## 15. Déploiement
+
+### 15.1 `compose.yml`
+
+```yaml
+services:
+  receiver:
+    build:
+      context: .
+      target: receiver
+    env_file: .env
+    restart: always
+    expose: ["8000"]
+    volumes:
+      - ./secrets:/secrets:ro
+      - ./data:/data
+
+  worker:
+    build:
+      context: .
+      target: worker
+    env_file: .env
+    restart: always
+    volumes:
+      - ./secrets:/secrets:ro
+      - ./data:/data
+
+  caddy:
+    image: caddy:2
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    restart: always
+
+volumes:
+  caddy_data:
+```
+
+### 15.2 `Caddyfile`
+
+```
+{$MEOW_DOMAIN} {
+  reverse_proxy receiver:8000
+}
+```
+
+TLS automatique via Let's Encrypt.
+
+### 15.3 Secrets
+
+Montés read-only dans `/secrets/` :
+
+- `github-app.pem` — clé privée de l'App.
+- `.env` — `MISTRAL_API_KEY`, `DAYTONA_API_KEY`, `GITHUB_APP_ID`, `GITHUB_WEBHOOK_SECRET`, `MEOW_DOMAIN`.
+
+### 15.4 Sizing recommandé
+
+VPS modeste : **2 vCPU / 4 Go RAM** (Hetzner CX22 ~5€/mois). Le worker est I/O bound — l'essentiel du travail tourne chez Daytona.
+
+## 16. Structure du repo
+
+```text
+meow-bot/
+├── compose.yml
+├── Caddyfile
+├── Dockerfile                       # multi-stage avec targets `receiver` et `worker`
+├── pyproject.toml
+├── uv.lock
+├── .env.example
+├── README.md
+├── LICENSE                          # Apache-2.0
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── CODE_OF_CONDUCT.md
+├── SECURITY.md
+├── SPEC.md                          # ce fichier
+├── manifest/
+│   └── app-manifest.yml             # GitHub App manifest pour le flow 1-clic
+├── prompts/
+│   └── review.md
+├── src/
+│   └── meow/
+│       ├── __init__.py
+│       ├── common/
+│       │   ├── config.py            # env vars + .meow.yml parsing (pydantic)
+│       │   ├── logging.py           # JSON structured + events.jsonl writer
+│       │   ├── github/
+│       │   │   ├── auth.py          # JWT + installation token cache
+│       │   │   ├── api.py           # PyGithub wrappers
+│       │   │   └── webhook.py       # HMAC verification
+│       │   └── secrets.py           # scrubbing patterns (Mistral key, gh_* tokens)
+│       ├── receiver/
+│       │   ├── __main__.py          # uvicorn entry
+│       │   └── app.py               # FastAPI routes
+│       └── worker/
+│           ├── __main__.py          # workflows.run_worker entry
+│           ├── workflows/
+│           │   ├── github_event_handler.py
+│           │   └── install_lifecycle.py
+│           ├── activities/
+│           │   ├── fetch_pr_context.py
+│           │   ├── run_review_in_sandbox.py
+│           │   ├── post_pr_comment.py
+│           │   └── register_installation.py
+│           └── sandbox/
+│               └── daytona.py       # wrapper SDK Daytona
+├── docs/
+│   ├── quickstart.md                # le quickstart 15-min
+│   ├── self-hosting.md              # tuning, backups, troubleshooting
+│   └── architecture.md              # diagrammes, decision records
+├── .github/
+│   ├── workflows/
+│   │   ├── ci.yml                   # ruff + ty + pytest
+│   │   └── dogfood.yml              # le bot review ses propres PRs (v0.1.1+)
+│   ├── dependabot.yml
+│   ├── CODEOWNERS
+│   └── ISSUE_TEMPLATE/
+└── tests/
+    ├── conftest.py
+    ├── fixtures/
+    └── ...
+```
+
+## 17. Roadmap
+
+| Version | Périmètre | Critère de sortie |
+|---|---|---|
+| `v0.0.x` | Scaffold : compose qui boot, receiver qui valide HMAC et log, manifest App fonctionnel. | `curl` un webhook factice signé → 200 + log JSON. |
+| **`v0.1.0`** | **`MENTION_REVIEW` end-to-end** : `@bot review` sur une PR → rapport posté. Read-only. `events.jsonl`. Quickstart doc. | Dogfood : meow-bot review ses propres PRs sans intervention manuelle pendant 1 semaine. |
+| `v0.2.0` | Classifier Mistral Small (préparation multi-intents). Budgets par thread (SQLite introduit). Intent `MENTION_QUESTION` (Q&A sur le repo, read-only). | Bot ne loop pas sur lui-même même en cas de provocation. |
+| `v0.3.0` | Intent `CODE_REQUEST` (profil `WRITE_BRANCH`). Token down-scopé `contents: write`. Branch protection recommandée doc. Sanitization étendue. | Une PR fonctionnelle ouverte par le bot, mergeable. |
+| `v0.4.0` | Intent `TRIAGE` (issues ouvertes). Profil `READ_ONLY` + labels. | Labels suggérés cohérents sur 20 issues réelles du dogfood. |
+| `v0.5.0` | `RepoScanner` cron proactif, opt-in via `.meow.yml`. | Pas de faux positifs gênants sur 1 mois de dogfood. |
+| `v1.0.0` | API stable, doc complète, ≥ 3 users externes confirment usage, marketplace listing optionnel. | Voir §19. |
+| `v2.x` (?) | Mode SaaS expérimental (sous-projet séparé). | À évaluer. |
+
+## 18. Tests & dogfood
+
+- **Unit / intégration** : `pytest` sur les modules `common/*` et `workflows/*` avec mocks pour Mistral Workflows et Daytona. CI verte requise pour merge.
+- **Dogfood** : dès v0.1, l'instance officielle (hébergée par le mainteneur) est installée sur `clemparpa/meow-bot`. Workflow `.github/workflows/dogfood.yml` n'est **pas nécessaire** (c'est le bot lui-même qui s'auto-applique via webhooks). Si une régression échappe au CI, elle se voit sur la prochaine PR.
+- **Smoke e2e** : checklist manuelle (~10 min) avant chaque release tag, documentée dans [docs/release.md](docs/release.md) à créer.
+
+## 19. Critères d'acceptation v1.0
+
+- [ ] Fichiers OSS obligatoires complets et à jour (`LICENSE`, `README`, `CHANGELOG`, `CONTRIBUTING`, `CODE_OF_CONDUCT`, `SECURITY`, `CODEOWNERS`, `SPEC`).
+- [ ] CI verte (`ci.yml`) ≥ 30 jours sans rollback.
+- [ ] README documente le quickstart 15-min testé sur VPS vierge.
+- [ ] App manifest validé : un nouvel utilisateur peut créer son App + lancer le worker en < 15 min.
+- [ ] Profils `READ_ONLY` et `WRITE_BRANCH` opérationnels avec down-scoping de token.
+- [ ] Budgets par thread fonctionnels (anti-loop, anti-burn).
+- [ ] Dogfood actif sur le repo officiel depuis ≥ 60 jours.
+- [ ] ≥ 3 self-hosters externes ont signalé une instance opérationnelle.
+- [ ] SECURITY.md testé : un report fictif a reçu réponse < 7 jours.
+
+## 20. Questions encore ouvertes
+
+- **Repo : compte perso ou org `flush` ?** Pour l'instant `clemparpa/meow-bot`. Transfert envisagé après v0.1.
+- **Versioning de `mistral-vibe`** : pin strict dans le Dockerfile vs floating ? Le repo dogfood servira de canary.
+- **Sub-issues / draft PRs** : faut-il les traiter différemment ? Probablement skip silencieux en v0.1.
+- **Multi-langues du bot** : le `.meow.yml` expose `language: auto`. La détection effective (LLM ? heuristique simple ?) reste à décider à l'implémentation.
+- **Mode SaaS futur** : si jamais on le fait, sous-projet séparé (`meow-cloud` ?) pour ne pas polluer le core OSS.
 
 ---
 
-## 12. Stratégie de release
-
-- **Versionnage** : SemVer 2.0.0.
-- **Tags** : `v1.0.0`, `v1.0.1`, …
-- **Floating major tag** : `v1` re-pointé après chaque release non-breaking.
-- **Breaking changes** : majeure incrémentée, jamais sans entrée dans `CHANGELOG.md` + section "Migration" dans le README.
-- **Pre-releases** : `v1.0.0-rc.1` pour les RC, testées via le repo dogfood pendant ≥ 1 semaine avant promotion.
-- **Marketplace** : publication officielle à partir de `v1.0.0`.
-
----
-
-## 13. Roadmap
-
-| Version | Contenu | Critère de sortie |
-|---------|---------|-------------------|
-| `v0.1.0` | MVP : `mode: review` uniquement, module Python `ci_vibe`, prompt minimal, doc README basique. | `ci.yml` vert (ruff + ty + pytest + actionlint + markdownlint) + 1 smoke test e2e manuel sur une PR factice sur `clemparpa/ci-vibe`. |
-| `v0.2.0` | Ajout `mode: security`, prompt SAST-style adapté de claude-code-security-review. | Faux positifs < 30% sur un set de 10 PRs annotées manuellement. |
-| `v0.3.0` | Ajout `mode: triage`, label suggestion via `gh issue edit`. | Labels suggérés cohérents sur 20 issues réelles. |
-| `v0.4.0` | `mode: custom`, support `agents-md-path`, hooks pre/post via `vibe-args`. | Doc utilisateur complète, ≥ 3 utilisateurs externes confirment usage. |
-| `v0.5.0` | `fail-on-findings`, outputs structurés, SARIF upload optionnel. | Intégration avec Code Scanning testée. |
-| **`v1.0.0`** | API stable, marketplace publié, security audit interne, comparaison documentée vs claude-code-action. | Voir §14. |
-
----
-
-## 14. Critères d'acceptation v1.0
-
-- [ ] Tous les fichiers OSS obligatoires présents et à jour (`LICENSE`, `README`, `CHANGELOG`, `CONTRIBUTING`, `CODE_OF_CONDUCT`, `SECURITY`, `CODEOWNERS`).
-- [ ] CI verte (`ci.yml`, `dogfood.yml`) depuis ≥ 30 jours sans rollback.
-- [ ] README documente les 4 modes avec exemples copy-pastable testés.
-- [ ] `actionlint`, `shellcheck`, `markdownlint`, `shfmt`, `bats-core` tous en passing.
-- [ ] Dependabot actif et au moins une PR mergée.
-- [ ] `update-vibe-version.yml` a tourné au moins 2 fois sans intervention.
-- [ ] Branch protection active sur `main` avec required reviews et required checks.
-- [ ] `SECURITY.md` testé : un report fictif a reçu réponse en < 7 jours.
-- [ ] Au moins 3 utilisateurs externes (hors mainteneurs) ont consommé l'action sur leurs repos.
-- [ ] Publication marketplace effective.
-- [ ] Coût moyen par mode documenté avec données réelles (≥ 50 runs).
-
----
-
-## 15. Décisions enregistrées et questions ouvertes
-
-### Décisions prises (Étape 0)
-
-1. **Nom du repo** : `clemparpa/ci-vibe`. Transfert futur envisagé vers l'org `flush` (à créer).
-2. **Organisation GitHub** : compte perso `clemparpa` d'abord. Transfert vers org `flush` plus tard, après v0.1.0 minimum.
-3. **Sécurité** : utilisation du **GitHub Private Vulnerability Reporting** natif. Pas d'email de contact exposé.
-4. **Dogfood** : différé à v0.2+. Pas de workflow `dogfood.yml` en v0.1.
-5. **Politique de support des versions Vibe** : **dernière version stable uniquement** en v0.x. La règle « dernière + n-1 » sera évaluée à partir de v1.0.
-
-### Décisions prises (Pivot v1.1 de la spec)
-
-1. **Implémentation : Python** au lieu de bash. Déclencheur : la lib `mistral-vibe` expose une API publique `from vibe.core import run_programmatic` (re-exportée, listée dans `__all__`). Bash aurait demandé 5 scripts + `envsubst` + `perl` + `sed`/`jq` ; Python rassemble la logique dans un module testable, avec stack trace lisible et tests `pytest`.
-2. **Tooling Python = stack Astral** : `uv` (deps), `ruff` (lint + format), `ty` (type-check, en preview). Pas de `mypy`, pas de `black`, pas de `flake8`.
-3. **`uv run --no-project --with mistral-vibe==<pin>`** au lieu d'épingler Vibe dans `pyproject.toml`. Pattern repris d'OpenHands. Permet le versioning indépendant via input `vibe-version`.
-4. **Inspirations OpenHands** intégrées : préflight permission check, `enable-uv-cache: false` par défaut, recommandation `persist-credentials: false`. Pas intégrés en v0.1 : A/B testing modèles, inline review comments, sub-agents, Laminar observability.
-
-### Questions encore ouvertes
-
-1. **SARIF output** : reporter dans le mode security pour intégrer GitHub Code Scanning ? Forte valeur ajoutée, coût d'implémentation moyen. À trancher pour la v0.5 (cf. roadmap §13).
-2. **Self-hosted runner support** : documenté ou explicitement non supporté en v1 ? À trancher après le premier feedback utilisateur externe.
-
----
-
-## 16. Références
-
-- [Mistral Vibe — repo](https://github.com/mistralai/mistral-vibe)
-- [Mistral Vibe — docs agents & skills](https://docs.mistral.ai/mistral-vibe/agents-skills)
-- [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action) — référence de design
-- [`anthropics/claude-code-security-review`](https://github.com/anthropics/claude-code-security-review) — référence pour le prompt SAST
-- [AGENTS.md spec](https://agents.md/)
-- [GitHub Actions — creating composite actions](https://docs.github.com/en/actions/creating-actions/creating-a-composite-action)
-- [Semantic Versioning 2.0.0](https://semver.org/)
-- [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/)
-- [Contributor Covenant 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/)
+*Document vivant — itérer librement au fil des décisions.*
