@@ -1,0 +1,86 @@
+"""Tests for :mod:`meow.common.config`."""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from meow.common.config import Settings
+
+_REQUIRED_ENV_VARS = (
+    "MEOW_DOMAIN",
+    "GITHUB_APP_ID",
+    "GITHUB_WEBHOOK_SECRET",
+    "MISTRAL_API_KEY",
+    "DAYTONA_API_KEY",
+    "GITHUB_APP_PRIVATE_KEY_PATH",
+)
+
+
+def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure none of the settings vars are inherited from the host shell."""
+
+    for name in _REQUIRED_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_settings_raises_when_webhook_secret_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _clear_env(monkeypatch)
+    # Move cwd to a directory without a `.env` so the default loader has nothing
+    # to fall back to.
+    monkeypatch.chdir(tmp_path)
+
+    monkeypatch.setenv("MEOW_DOMAIN", "example.com")
+    monkeypatch.setenv("GITHUB_APP_ID", "12345")
+    # GITHUB_WEBHOOK_SECRET intentionally omitted.
+    monkeypatch.setenv("MISTRAL_API_KEY", "mistral-key")
+    monkeypatch.setenv("DAYTONA_API_KEY", "daytona-key")
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings()  # ty: ignore[missing-argument]
+
+    missing = {
+        ".".join(str(loc) for loc in err["loc"])
+        for err in exc_info.value.errors()
+        if err["type"] == "missing"
+    }
+    assert "github_webhook_secret" in missing
+
+
+def test_settings_loads_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    monkeypatch.setenv("MEOW_DOMAIN", "meow.example.com")
+    monkeypatch.setenv("GITHUB_APP_ID", "42")
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cr3t")
+    monkeypatch.setenv("MISTRAL_API_KEY", "mk-test")
+    monkeypatch.setenv("DAYTONA_API_KEY", "dk-test")
+
+    settings = Settings()  # ty: ignore[missing-argument]
+
+    assert settings.meow_domain == "meow.example.com"
+    assert settings.github_app_id == "42"
+    assert settings.github_webhook_secret == "s3cr3t"
+    assert settings.mistral_api_key == "mk-test"
+    assert settings.daytona_api_key == "dk-test"
+    # Default value preserved when env var absent.
+    assert settings.github_app_private_key_path == "/secrets/github-app.pem"
+
+
+def test_settings_private_key_path_override(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    monkeypatch.setenv("MEOW_DOMAIN", "meow.example.com")
+    monkeypatch.setenv("GITHUB_APP_ID", "42")
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cr3t")
+    monkeypatch.setenv("MISTRAL_API_KEY", "mk-test")
+    monkeypatch.setenv("DAYTONA_API_KEY", "dk-test")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_PATH", "/tmp/custom.pem")
+
+    settings = Settings()  # ty: ignore[missing-argument]
+
+    assert settings.github_app_private_key_path == "/tmp/custom.pem"
