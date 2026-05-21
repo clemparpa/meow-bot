@@ -1,0 +1,50 @@
+# Keep build context small and free of host-only artefacts.
+
+# Git / VCS
+.git
+.gitignore
+.gitattributes
+
+# Python virtualenvs and caches
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.ty_cache
+
+# Local secrets and runtime data (mounted at runtime via compose, not baked in)
+.env
+.env.*
+!.env.example
+secrets/
+data/
+*.pem
+
+# Tests and dev-only directories (runtime images don't need them)
+tests/
+docs/
+documentations/
+
+# CI / repo meta
+.github/
+.claude/
+
+# Editor / OS noise
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.bak
+tmp/
+node_modules/
+
+# Docker artefacts themselves
+Dockerfile
+.dockerignore
+compose.yml
+docker-compose.yml
+Caddyfile
