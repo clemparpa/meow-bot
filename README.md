@@ -71,10 +71,16 @@ cp .env.example .env
 MEOW_DOMAIN=localhost docker compose up -d
 docker compose ps                                # 3 services Up
 curl -fk https://localhost/healthz               # Caddy -> receiver, cert is Caddy's internal CA
+# POST a signed webhook through the whole stack:
+WEBHOOK_SECRET=$(grep ^GITHUB_WEBHOOK_SECRET .env | cut -d= -f2) \
+  scripts/curl-webhook.sh                        # expects HTTP 200 + {"queued": true}
+docker compose logs receiver | grep webhook.accepted   # JSON log line visible
 docker compose down
 ```
 
 With `MEOW_DOMAIN=localhost` Caddy uses its own internal CA (the `-k` flag tells curl to trust it). In production, a real domain pointed at your VPS triggers Let's Encrypt automatically — no Caddyfile change required.
+
+The same chain (boot → signed POST → log assertion) runs in CI on every PR via [`.github/workflows/smoke-e2e.yml`](.github/workflows/smoke-e2e.yml).
 
 ## Create your GitHub App
 

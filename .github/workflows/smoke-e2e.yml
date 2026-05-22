@@ -1,0 +1,73 @@
+name: Smoke E2E
+
+# v0.0.x exit criterion (spec §17 / stories/v0.0.x.md S12).
+#
+# Boots the full docker compose stack (receiver + worker + caddy), POSTs a
+# signed `issue_comment` webhook through Caddy, and asserts the receiver
+# emitted a `webhook.accepted` JSON log line. Kept in its own workflow so
+# `ci.yml` (lint + ty + pytest, ~30s) stays fast.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Sanity-check docker availability
+        # GitHub-hosted ubuntu-* runners ship Docker Engine + Compose v2
+        # preinstalled. This step fails fast with a clear message if a
+        # future image bump ever drops them.
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Write placeholder .env
+        run: |
+          cat > .env <<'EOF'
+          MEOW_DOMAIN=localhost
+          GITHUB_APP_ID=1
+          GITHUB_WEBHOOK_SECRET=ci-smoke-secret
+          MISTRAL_API_KEY=ci-placeholder
+          DAYTONA_API_KEY=ci-placeholder
+          EOF
+
+      - name: Boot stack
+        run: MEOW_DOMAIN=localhost docker compose up -d --build
+
+      - name: Wait for healthz
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -fsk https://localhost/healthz >/dev/null; then
+              echo "receiver healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::receiver did not become healthy within 60s"
+          exit 1
+
+      - name: POST signed webhook
+        env:
+          WEBHOOK_SECRET: ci-smoke-secret
+        run: bash scripts/curl-webhook.sh
+
+      - name: Assert webhook.accepted in receiver logs
+        run: |
+          if ! docker compose logs receiver | grep -q '"event": "webhook.accepted"'; then
+            echo "::error::webhook.accepted log line not found"
+            docker compose logs receiver
+            exit 1
+          fi
+
+      - name: Dump logs and tear down
+        if: always()
+        run: |
+          docker compose logs
+          docker compose down -v
