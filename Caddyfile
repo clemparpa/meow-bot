@@ -1,0 +1,10 @@
+# meow-bot reverse proxy (spec §15.2).
+#
+# {$MEOW_DOMAIN} is read from the caddy container's environment (set via
+# compose.yml). With a real domain Caddy auto-provisions a Let's Encrypt
+# cert; with `localhost` Caddy serves its own internal CA (useful for
+# smoke-testing the chain without DNS).
+
+{$MEOW_DOMAIN} {
+	reverse_proxy receiver:8000
+}
