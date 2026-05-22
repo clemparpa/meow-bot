@@ -1,12 +1,15 @@
 """Application settings loaded from environment / `.env` file.
 
-Centralises the runtime configuration described in spec §15.3.  All required
-fields raise :class:`pydantic.ValidationError` at startup when missing — this
-gives us a fail-fast guarantee instead of discovering the issue mid-request.
+Centralises the runtime configuration described in spec §15.3.  Required
+fields raise :class:`pydantic.ValidationError` at startup when missing **or
+empty** — this gives us a fail-fast guarantee instead of discovering the
+issue mid-request, and means copying ``.env.example`` to ``.env`` without
+filling in any value fails loudly rather than booting a misconfigured stack.
 """
 
 from __future__ import annotations
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,9 +33,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    meow_domain: str
-    github_app_id: str
-    github_webhook_secret: str
-    mistral_api_key: str
-    daytona_api_key: str
-    github_app_private_key_path: str = "/secrets/github-app.pem"
+    meow_domain: str = Field(min_length=1)
+    github_app_id: str = Field(min_length=1)
+    github_webhook_secret: str = Field(min_length=1)
+    mistral_api_key: str = Field(min_length=1)
+    daytona_api_key: str = Field(min_length=1)
+    github_app_private_key_path: str = Field(default="/secrets/github-app.pem", min_length=1)
