@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
 from meow.common.config import Settings
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _REQUIRED_ENV_VARS = (
     "MEOW_DOMAIN",
@@ -68,6 +72,36 @@ def test_settings_loads_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> N
     assert settings.daytona_api_key == "dk-test"
     # Default value preserved when env var absent.
     assert settings.github_app_private_key_path == "/secrets/github-app.pem"
+
+
+def test_env_example_rejected_when_copied_as_is(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """`.env.example` ships with empty values on purpose (template).
+
+    Mirrors the S7 acceptance criterion: copying it to `.env` and loading
+    `Settings` must raise — otherwise a self-hoster could boot the stack
+    with empty secrets and discover the issue mid-request.
+    """
+    _clear_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    env_example = _REPO_ROOT / ".env.example"
+    assert env_example.is_file(), "expected .env.example at the repo root"
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(_env_file=str(env_example))  # ty: ignore[missing-argument,unknown-argument]
+
+    short_fields = {
+        ".".join(str(loc) for loc in err["loc"])
+        for err in exc_info.value.errors()
+        if err["type"] == "string_too_short"
+    }
+    assert {
+        "meow_domain",
+        "github_app_id",
+        "github_webhook_secret",
+        "mistral_api_key",
+        "daytona_api_key",
+    } <= short_fields
 
 
 def test_settings_private_key_path_override(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
