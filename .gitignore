@@ -9,8 +9,12 @@ node_modules/
 *.bak
 
 # Self-host runtime artifacts
-secrets/
-data/
+# Use `dir/*` rather than `dir/` so the `!.../.gitkeep` exception is honored —
+# git cannot re-include a file under a parent that's been excluded as a dir.
+secrets/*
+!secrets/.gitkeep
+data/*
+!data/.gitkeep
 *.pem
 .env
 !.env.example

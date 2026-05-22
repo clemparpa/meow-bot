@@ -1,0 +1,56 @@
+# meow-bot stack (spec §15.1).
+#
+# Three services:
+#   - receiver: FastAPI app behind uvicorn, internal only (port not published).
+#   - worker:   v0.0.x stub (signal.pause). v0.1.0+ runs the durable worker.
+#   - caddy:    reverse-proxies $MEOW_DOMAIN -> receiver:8000 with auto TLS.
+#
+# Local smoke:
+#   cp .env.example .env  # then fill every var with a non-empty value
+#   MEOW_DOMAIN=localhost docker compose up -d
+#
+# Production: point $MEOW_DOMAIN's DNS at this host; Caddy provisions a
+# Let's Encrypt cert automatically on first request.
+
+services:
+  receiver:
+    build:
+      context: .
+      target: receiver
+    env_file: .env
+    restart: always
+    expose:
+      - "8000"
+    volumes:
+      - ./secrets:/secrets:ro
+      - ./data:/data
+
+  worker:
+    build:
+      context: .
+      target: worker
+    env_file: .env
+    restart: always
+    volumes:
+      - ./secrets:/secrets:ro
+      - ./data:/data
+
+  caddy:
+    image: caddy:2
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Caddy reads {$MEOW_DOMAIN} from its own env, not from .env files.
+      MEOW_DOMAIN: ${MEOW_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - receiver
+
+volumes:
+  caddy_data:
+  caddy_config:

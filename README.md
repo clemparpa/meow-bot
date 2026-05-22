@@ -61,6 +61,21 @@ The intended flow targets `< 15 min` for a developer who already runs Docker on 
 5. `docker compose up -d`.
 6. Install your new App on a target repo, then `@<your-bot> review` on a PR.
 
+### Local smoke (no GitHub App needed)
+
+To verify the stack boots end-to-end on your laptop:
+
+```bash
+cp .env.example .env
+# fill every var with a non-empty value (any placeholder works for the boot)
+MEOW_DOMAIN=localhost docker compose up -d
+docker compose ps                                # 3 services Up
+curl -fk https://localhost/healthz               # Caddy -> receiver, cert is Caddy's internal CA
+docker compose down
+```
+
+With `MEOW_DOMAIN=localhost` Caddy uses its own internal CA (the `-k` flag tells curl to trust it). In production, a real domain pointed at your VPS triggers Let's Encrypt automatically — no Caddyfile change required.
+
 ## Create your GitHub App
 
 The repo ships a [GitHub App manifest](manifest/app-manifest.yml) that pre-fills GitHub's "Create App" form with the right permissions and events (see [SPEC.md §5](SPEC.md)) so you don't have to click through them manually.
