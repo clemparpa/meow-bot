@@ -45,7 +45,8 @@ Aucun mode SaaS pour l'instant. Aucune dépendance vers un service hébergé par
 | Sandbox | Daytona managé | Démarrage <100ms, snapshots, SDK Python. Self-host différé. |
 | Webhook receiver | FastAPI minimal | Mince, juste valider HMAC + `start_execution`. |
 | Worker | Process Python (`workflows.run_worker`) | Tourne 24/7, idle quand rien à faire. |
-| Auth GitHub | GitHub App + JWT → installation tokens | Standard. |
+| GitHub SDK | `githubkit` (à partir de **v0.1.0**) | Modèles Pydantic typés pour tous les webhooks + client REST/GraphQL async + helpers d'auth GitHub App (JWT, installation tokens). Généré depuis les schémas OpenAPI officiels GitHub, donc toujours à jour. **Non utilisé en v0.0.x** : le receiver minimal valide juste l'HMAC, la lib n'apporte rien à ce stade. Remplace l'usage de `PyGithub` initialement envisagé. |
+| Auth GitHub | GitHub App + JWT → installation tokens (via `githubkit` à partir de v0.1.0) | Standard. |
 | Hébergement | VPS Linux + Docker Compose | Simplicité, contrôle. |
 | LLM | Mistral Medium 3.5 (par défaut, surchargeable) | — |
 | Persistance | **Aucune en v0.1.** SQLite à partir de v0.2 pour les budgets. | YAGNI. |
@@ -153,6 +154,8 @@ Doit répondre **<10s** sous peine de timeout GitHub.
 
 **`HANDLED_EVENTS` en v0.1** : `issue_comment`, `installation`, `installation_repositories`.
 
+> **Note d'implémentation** : en **v0.0.x**, `verify_hmac` est une mini-fonction maison (cf §12.2). À partir de **v0.1.0**, le receiver utilisera `githubkit.versions.<api>.webhooks.WebhookNamespace.verify` pour la vérification HMAC et `WebhookNamespace.parse_obj(event, payload)` pour obtenir un modèle Pydantic typé (`WebhookIssueCommentCreated`, `WebhookInstallationCreated`, etc.) plutôt qu'un `dict` brut. Le `payload` transmis à `start_execution` reste sérialisé en JSON (le worker re-parsera côté activity).
+
 ## 7. Worker
 
 Process Python qui appelle `workflows.run_worker(...)`.
@@ -210,7 +213,7 @@ v0.2+ : créera les schedules `RepoScanner` (cron proactif) par installation.
 
 | Activity | Effet | Retries |
 |---|---|---|
-| `fetch_pr_context` | Charge PR + diff + `.meow.yml` via PyGithub | 3, exp backoff |
+| `fetch_pr_context` | Charge PR + diff + `.meow.yml` via le client REST async de `githubkit` | 3, exp backoff |
 | `run_review_in_sandbox` | **Spawn Daytona + clone + `vibe.core.run_programmatic` read-only + capture rapport** | 1, non-idempotent |
 | `post_pr_comment` | POST commentaire via GitHub API (scrubbing secrets en amont) | 5, idempotence par hash du body |
 | `register_installation` | Log dans `events.jsonl` | 3 |
@@ -310,23 +313,9 @@ Flow standard à trois étages :
 2. **JWT** signé avec la private key (10 min TTL).
 3. **Installation token** obtenu en échangeant le JWT, scopé à l'installation cible (1h TTL).
 
-```python
-def installation_token(installation_id: int, permissions: dict | None = None) -> str:
-    cached = _cache.get((installation_id, freeze(permissions)))
-    if cached and cached.expires_at > now() + 60:
-        return cached.token
-    jwt = make_jwt(app_id=APP_ID, private_key=APP_KEY, ttl=600)
-    resp = requests.post(
-        f"https://api.github.com/app/installations/{installation_id}/access_tokens",
-        headers={"Authorization": f"Bearer {jwt}"},
-        json={"permissions": permissions} if permissions else {},
-    )
-    token, exp = resp.json()["token"], resp.json()["expires_at"]
-    _cache[(installation_id, freeze(permissions))] = CachedToken(token, parse_dt(exp))
-    return token
-```
+À partir de **v0.1.0**, ce flow est délégué à **`githubkit`** via son `AppInstallationAuthStrategy` : `GitHub(AppInstallationAuthStrategy(app_id=..., private_key=..., installation_id=..., permissions={"contents": "read"}))`. Le SDK gère la signature JWT, l'échange contre l'installation token et le cache de tokens. Pas d'implémentation maison à maintenir.
 
-**Best practice** : pour `run_review_in_sandbox`, on **down-scope** le token à `{"contents": "read"}` quand on appelle `access_tokens`. Le sandbox ne peut alors ni commenter ni push, même si Vibe est compromis par prompt injection.
+**Best practice** : pour `run_review_in_sandbox`, on **down-scope** le token via le paramètre `permissions={"contents": "read"}` de la stratégie d'auth. Le sandbox ne peut alors ni commenter ni push, même si Vibe est compromis par prompt injection.
 
 ## 12. Sécurité
 
@@ -492,9 +481,9 @@ meow-bot/
 │       │   ├── config.py            # env vars + .meow.yml parsing (pydantic)
 │       │   ├── logging.py           # JSON structured + events.jsonl writer
 │       │   ├── github/
-│       │   │   ├── auth.py          # JWT + installation token cache
-│       │   │   ├── api.py           # PyGithub wrappers
-│       │   │   └── webhook.py       # HMAC verification
+│       │   │   ├── auth.py          # v0.0.x: stub. v0.1.0+: wrapper léger autour de githubkit.AppInstallationAuthStrategy (cache + down-scoping)
+│       │   │   ├── api.py           # v0.1.0+: wrappers thin autour du client githubkit (REST/GraphQL async typé)
+│       │   │   └── webhook.py       # v0.0.x: vérif HMAC maison. v0.1.0+: re-export de githubkit WebhookNamespace.verify/parse_obj
 │       │   └── secrets.py           # scrubbing patterns (Mistral key, gh_* tokens)
 │       ├── receiver/
 │       │   ├── __main__.py          # uvicorn entry
@@ -533,7 +522,7 @@ meow-bot/
 | Version | Périmètre | Critère de sortie |
 |---|---|---|
 | `v0.0.x` | Scaffold : compose qui boot, receiver qui valide HMAC et log, manifest App fonctionnel. | `curl` un webhook factice signé → 200 + log JSON. |
-| **`v0.1.0`** | **`MENTION_REVIEW` end-to-end** : `@bot review` sur une PR → rapport posté. Read-only. `events.jsonl`. Quickstart doc. | Dogfood : meow-bot review ses propres PRs sans intervention manuelle pendant 1 semaine. |
+| **`v0.1.0`** | **`MENTION_REVIEW` end-to-end** : `@bot review` sur une PR → rapport posté. Read-only. `events.jsonl`. Quickstart doc. Introduction de **`githubkit`** comme SDK GitHub unique (webhooks typés + REST/GraphQL + auth GitHub App) ; retrait de l'HMAC verification maison du receiver. | Dogfood : meow-bot review ses propres PRs sans intervention manuelle pendant 1 semaine. |
 | `v0.2.0` | Classifier Mistral Small (préparation multi-intents). Budgets par thread (SQLite introduit). Intent `MENTION_QUESTION` (Q&A sur le repo, read-only). | Bot ne loop pas sur lui-même même en cas de provocation. |
 | `v0.3.0` | Intent `CODE_REQUEST` (profil `WRITE_BRANCH`). Token down-scopé `contents: write`. Branch protection recommandée doc. Sanitization étendue. | Une PR fonctionnelle ouverte par le bot, mergeable. |
 | `v0.4.0` | Intent `TRIAGE` (issues ouvertes). Profil `READ_ONLY` + labels. | Labels suggérés cohérents sur 20 issues réelles du dogfood. |
