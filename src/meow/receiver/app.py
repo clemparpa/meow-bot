@@ -14,11 +14,12 @@ No call to Mistral Workflows or Daytona is made at this stage — the
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from githubkit.webhooks import parse
+from pydantic import ValidationError
 
 from meow.common.config import Settings
 from meow.common.github.webhook import InvalidSignature, verify_signature
@@ -65,12 +66,23 @@ async def gh_webhook(request: Request) -> dict[str, Any]:
         logger.info("webhook.skipped", extra={"reason": "no-event", "delivery": delivery})
         return {"skipped": "event"}
 
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="invalid JSON body") from None
+    if event not in _HANDLED_EVENTS:
+        logger.info(
+            "webhook.skipped",
+            extra={"reason": "event-not-handled", "delivery": delivery, "gh_event": event},
+        )
+        return {"skipped": "event"}
 
-    sender_login = (payload.get("sender") or {}).get("login")
+    try:
+        parsed = parse(event, body)
+    except ValidationError:
+        logger.info(
+            "webhook.malformed_payload",
+            extra={"delivery": delivery, "gh_event": event},
+        )
+        raise HTTPException(status_code=400, detail="malformed webhook payload") from None
+
+    sender_login = parsed.sender.login if parsed.sender else None
     bot = _bot_login()
     if bot and sender_login == bot:
         logger.info(
@@ -78,13 +90,6 @@ async def gh_webhook(request: Request) -> dict[str, Any]:
             extra={"reason": "self", "delivery": delivery, "gh_event": event},
         )
         return {"skipped": "self"}
-
-    if event not in _HANDLED_EVENTS:
-        logger.info(
-            "webhook.skipped",
-            extra={"reason": "event-not-handled", "delivery": delivery, "gh_event": event},
-        )
-        return {"skipped": "event"}
 
     logger.info(
         "webhook.accepted",
