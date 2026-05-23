@@ -1,18 +1,14 @@
 """HMAC-SHA256 verification for GitHub webhook deliveries.
 
-Implements the security primitive from spec §12.2: validate the
-``X-Hub-Signature-256`` header against the request body using the
-shared webhook secret, with a constant-time comparison.
+Uses githubkit's native verification as per SPEC §15.2.
+Replaces the hand-rolled implementation from v0.0.x.
 """
 
 from __future__ import annotations
 
-import hashlib
-import hmac
+from githubkit.webhooks import verify as gh_verify
 
 __all__ = ["InvalidSignature", "verify_signature"]
-
-_SIGNATURE_PREFIX = "sha256="
 
 
 class InvalidSignature(Exception):
@@ -20,7 +16,7 @@ class InvalidSignature(Exception):
 
 
 def verify_signature(header: str | None, body: bytes, secret: str) -> None:
-    """Verify a GitHub ``X-Hub-Signature-256`` header.
+    """Verify a GitHub ``X-Hub-Signature-256`` header using githubkit.
 
     Parameters
     ----------
@@ -38,14 +34,13 @@ def verify_signature(header: str | None, body: bytes, secret: str) -> None:
         If the header is missing, malformed, or does not match the
         HMAC-SHA256 digest of ``body`` keyed by ``secret``.
     """
-    if header is None or not header.startswith(_SIGNATURE_PREFIX):
-        raise InvalidSignature("missing or malformed X-Hub-Signature-256 header")
+    if header is None:
+        raise InvalidSignature("missing X-Hub-Signature-256 header")
 
-    provided = header[len(_SIGNATURE_PREFIX) :]
-    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-
-    # ``hmac.compare_digest`` is timing-safe; it also short-circuits to False
-    # when the two strings differ in length, so truncated signatures are
-    # rejected here rather than via an explicit length check.
-    if not hmac.compare_digest(provided, expected):
-        raise InvalidSignature("signature mismatch")
+    try:
+        if not gh_verify(secret, body, header):
+            raise InvalidSignature("signature mismatch")
+    except AttributeError as e:
+        # githubkit's verify() calls .split("=") on the header and raises
+        # AttributeError when the prefix is missing or the value is not a str.
+        raise InvalidSignature(f"malformed signature header: {e}") from e
