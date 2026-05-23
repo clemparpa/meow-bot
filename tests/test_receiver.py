@@ -205,6 +205,7 @@ def _receiver_env(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.setenv("MISTRAL_API_KEY", "mistral-test")
     monkeypatch.setenv("DAYTONA_API_KEY", "daytona-test")
+    monkeypatch.setenv("DEPLOYMENT_NAME", "meow-bot-test")
     monkeypatch.delenv("MEOW_BOT_LOGIN", raising=False)
 
 

@@ -18,6 +18,7 @@ _REQUIRED_ENV_VARS = (
     "MISTRAL_API_KEY",
     "DAYTONA_API_KEY",
     "GITHUB_APP_PRIVATE_KEY_PATH",
+    "DEPLOYMENT_NAME",
 )
 
 
@@ -41,6 +42,7 @@ def test_settings_raises_when_webhook_secret_missing(
     # GITHUB_WEBHOOK_SECRET intentionally omitted.
     monkeypatch.setenv("MISTRAL_API_KEY", "mistral-key")
     monkeypatch.setenv("DAYTONA_API_KEY", "daytona-key")
+    monkeypatch.setenv("DEPLOYMENT_NAME", "test-deployment")
 
     with pytest.raises(ValidationError) as exc_info:
         Settings()  # ty: ignore[missing-argument]
@@ -62,6 +64,7 @@ def test_settings_loads_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> N
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cr3t")
     monkeypatch.setenv("MISTRAL_API_KEY", "mk-test")
     monkeypatch.setenv("DAYTONA_API_KEY", "dk-test")
+    monkeypatch.setenv("DEPLOYMENT_NAME", "meow-bot-test")
 
     settings = Settings()  # ty: ignore[missing-argument]
 
@@ -70,6 +73,7 @@ def test_settings_loads_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> N
     assert settings.github_webhook_secret == "s3cr3t"
     assert settings.mistral_api_key == "mk-test"
     assert settings.daytona_api_key == "dk-test"
+    assert settings.deployment_name == "meow-bot-test"
     # Default value preserved when env var absent.
     assert settings.github_app_private_key_path == "/secrets/github-app.pem"
 
@@ -113,6 +117,7 @@ def test_settings_private_key_path_override(monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cr3t")
     monkeypatch.setenv("MISTRAL_API_KEY", "mk-test")
     monkeypatch.setenv("DAYTONA_API_KEY", "dk-test")
+    monkeypatch.setenv("DEPLOYMENT_NAME", "meow-bot-test")
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_PATH", "/tmp/custom.pem")
 
     settings = Settings()  # ty: ignore[missing-argument]
