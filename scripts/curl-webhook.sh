@@ -17,13 +17,15 @@ set -euo pipefail
 
 URL="${1:-https://localhost/gh/webhook}"
 
-PAYLOAD='{"action":"created","sender":{"login":"alice"},"comment":{"body":"@meow review"}}'
+# Payload lives in a fixture file so the body satisfies githubkit's strict
+# WebhookIssueCommentCreated schema (required nested issue/comment/repository
+# fields). HMAC is computed over the exact file bytes; --data-binary @file
+# sends those same bytes, so the signature matches without intermediate
+# whitespace munging.
+PAYLOAD_FILE="$(dirname "$0")/fixtures/issue_comment.json"
 
-# Hex-only HMAC-SHA256 of the body, prefixed with `sha256=` to match the
-# X-Hub-Signature-256 contract enforced by meow.common.github.webhook.
 SIGNATURE="sha256=$(
-  printf '%s' "$PAYLOAD" \
-    | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex \
+  openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex "$PAYLOAD_FILE" \
     | awk '{print $NF}'
 )"
 
@@ -34,5 +36,5 @@ curl -fsSk -X POST "$URL" \
   -H "X-Hub-Signature-256: $SIGNATURE" \
   -H "X-GitHub-Event: issue_comment" \
   -H "X-GitHub-Delivery: $DELIVERY" \
-  -d "$PAYLOAD"
+  --data-binary "@$PAYLOAD_FILE"
 echo
