@@ -66,22 +66,29 @@ jobs:
           exit 1
 
       - name: Wait for worker to register with Mistral
-        # The worker boots, calls /v1/workflows/workers/whoami, then
-        # registers GithubEventHandler before polling. Give it a beat
-        # before we send a webhook so the execution has a worker to land
-        # on. 15s is comfortable; the boot path is dominated by the SDK
-        # init + one round-trip to api.mistral.ai.
+        # Two-step wait because `worker.started` is emitted BEFORE the SDK
+        # finishes booting. We need:
+        #   1. the SDK's `connected to temporal frontend` log line
+        #      (proves the worker reached the scheduler and registered),
+        #   2. one heartbeat cycle (~10s) so the deployment shows up as
+        #      "active" on the REST API the receiver hits — otherwise
+        #      `execute_workflow` returns `404 Workflow not found`
+        #      (cf. mistral-workflows Deployments.md, lifecycle section).
         run: |
-          for _ in $(seq 1 30); do
-            if docker compose logs worker | grep -q '"event": "worker.started"'; then
-              echo "worker started"
-              exit 0
+          for _ in $(seq 1 60); do
+            if docker compose logs worker | grep -q "connected to temporal frontend"; then
+              echo "worker connected to Mistral scheduler"
+              break
             fi
             sleep 1
           done
-          echo "::error::worker did not log worker.started within 30s"
-          docker compose logs worker
-          exit 1
+          if ! docker compose logs worker | grep -q "connected to temporal frontend"; then
+            echo "::error::worker did not connect to Mistral scheduler within 60s"
+            docker compose logs worker
+            exit 1
+          fi
+          echo "Sleeping 15s so the first heartbeat propagates to api.mistral.ai"
+          sleep 15
 
       - name: POST signed webhook
         env:
