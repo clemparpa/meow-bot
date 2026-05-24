@@ -40,6 +40,7 @@ def _auth_env(monkeypatch: pytest.MonkeyPatch, rsa_pem: Path) -> None:
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
     monkeypatch.setenv("MISTRAL_API_KEY", "mistral-test")
     monkeypatch.setenv("DAYTONA_API_KEY", "daytona-test")
+    monkeypatch.setenv("DEPLOYMENT_NAME", "meow-bot-test")
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_PATH", str(rsa_pem))
 
 

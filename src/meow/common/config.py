@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     - ``MISTRAL_API_KEY``
     - ``DAYTONA_API_KEY``
     - ``GITHUB_APP_PRIVATE_KEY_PATH`` (defaults to ``/secrets/github-app.pem``)
+    - ``DEPLOYMENT_NAME`` — Mistral Workflows deployment grouping the
+      receiver and worker(s) of one service together (spec §7). Consumed
+      by ``mistralai.workflows.run_worker`` at boot.
     """
 
     model_config = SettingsConfigDict(
@@ -39,3 +42,4 @@ class Settings(BaseSettings):
     mistral_api_key: str = Field(min_length=1)
     daytona_api_key: str = Field(min_length=1)
     github_app_private_key_path: str = Field(default="/secrets/github-app.pem", min_length=1)
+    deployment_name: str = Field(min_length=1)

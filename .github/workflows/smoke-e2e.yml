@@ -14,6 +14,11 @@ on:
 
 jobs:
   smoke:
+    # Skip when MISTRAL_API_KEY isn't available — typical for PRs from
+    # forks, since GitHub doesn't pass repo secrets to fork-triggered
+    # workflows. Maintainers review the diff before merge, and the smoke
+    # runs on the post-merge push to `main`.
+    if: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -28,13 +33,20 @@ jobs:
           docker --version
           docker compose version
 
-      - name: Write placeholder .env
+      - name: Write .env
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
         run: |
-          cat > .env <<'EOF'
+          if [ -z "$MISTRAL_API_KEY" ]; then
+            echo "::error::MISTRAL_API_KEY secret is not set on this repo"
+            exit 1
+          fi
+          cat > .env <<EOF
           MEOW_DOMAIN=localhost
           GITHUB_APP_ID=1
           GITHUB_WEBHOOK_SECRET=ci-smoke-secret
-          MISTRAL_API_KEY=ci-placeholder
+          MISTRAL_API_KEY=$MISTRAL_API_KEY
+          DEPLOYMENT_NAME=meow-bot-ci
           DAYTONA_API_KEY=ci-placeholder
           EOF
 
@@ -53,6 +65,31 @@ jobs:
           echo "::error::receiver did not become healthy within 60s"
           exit 1
 
+      - name: Wait for worker to register with Mistral
+        # Two-step wait because `worker.started` is emitted BEFORE the SDK
+        # finishes booting. We need:
+        #   1. the SDK's `connected to temporal frontend` log line
+        #      (proves the worker reached the scheduler and registered),
+        #   2. one heartbeat cycle (~10s) so the deployment shows up as
+        #      "active" on the REST API the receiver hits — otherwise
+        #      `execute_workflow` returns `404 Workflow not found`
+        #      (cf. mistral-workflows Deployments.md, lifecycle section).
+        run: |
+          for _ in $(seq 1 60); do
+            if docker compose logs worker | grep -q "connected to temporal frontend"; then
+              echo "worker connected to Mistral scheduler"
+              break
+            fi
+            sleep 1
+          done
+          if ! docker compose logs worker | grep -q "connected to temporal frontend"; then
+            echo "::error::worker did not connect to Mistral scheduler within 60s"
+            docker compose logs worker
+            exit 1
+          fi
+          echo "Sleeping 15s so the first heartbeat propagates to api.mistral.ai"
+          sleep 15
+
       - name: POST signed webhook
         env:
           WEBHOOK_SECRET: ci-smoke-secret
@@ -65,6 +102,22 @@ jobs:
             docker compose logs receiver
             exit 1
           fi
+
+      - name: Assert workflow.github_event.received in worker logs
+        # Receiver returned 200 immediately after `execute_workflow`, but
+        # the worker still has to pull the task from the queue. Poll for
+        # up to 30s.
+        run: |
+          for _ in $(seq 1 30); do
+            if docker compose logs worker | grep -q '"event": "workflow.github_event.received"'; then
+              echo "worker processed event"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::workflow.github_event.received log line not found in worker"
+          docker compose logs worker
+          exit 1
 
       - name: Dump logs and tear down
         if: always()

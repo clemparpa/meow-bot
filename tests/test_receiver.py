@@ -9,6 +9,7 @@ import io
 import json
 import logging
 from collections.abc import AsyncIterator, Iterator
+from unittest.mock import MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -205,6 +206,7 @@ def _receiver_env(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.setenv("MISTRAL_API_KEY", "mistral-test")
     monkeypatch.setenv("DAYTONA_API_KEY", "daytona-test")
+    monkeypatch.setenv("DEPLOYMENT_NAME", "meow-bot-test")
     monkeypatch.delenv("MEOW_BOT_LOGIN", raising=False)
 
 
@@ -234,11 +236,21 @@ def log_buffer() -> Iterator[io.StringIO]:
         logger.propagate = original_propagate
 
 
+EXECUTION_ID = "exec-fake-123"
+
+
 @pytest.fixture
 async def client(log_buffer: io.StringIO) -> AsyncIterator[AsyncClient]:
     from meow.receiver import app as app_module
 
     importlib.reload(app_module)
+    # Replace the live Mistral workflows handle so no test ever hits
+    # `api.mistral.ai`. Individual tests can introspect this mock via
+    # `app_module._workflows_client.workflows.execute_workflow`.
+    app_module._workflows_client.workflows = MagicMock()
+    app_module._workflows_client.workflows.execute_workflow.return_value = MagicMock(
+        execution_id=EXECUTION_ID, status="RUNNING"
+    )
     transport = ASGITransport(app=app_module.app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
@@ -297,7 +309,7 @@ async def test_webhook_issue_comment_returns_queued(client: AsyncClient) -> None
         },
     )
     assert response.status_code == 200
-    assert response.json() == {"queued": True}
+    assert response.json() == {"queued": True, "execution_id": EXECUTION_ID}
 
 
 async def test_webhook_self_event_skipped(
@@ -341,6 +353,7 @@ async def test_webhook_logs_accepted_event(log_buffer: io.StringIO, client: Asyn
     assert record["level"] == "info"
     assert record["gh_event"] == "issue_comment"
     assert record["delivery"] == "abc-123"
+    assert record["execution_id"] == EXECUTION_ID
 
 
 async def test_webhook_malformed_payload_returns_400(client: AsyncClient) -> None:
@@ -354,3 +367,30 @@ async def test_webhook_malformed_payload_returns_400(client: AsyncClient) -> Non
         },
     )
     assert response.status_code == 400
+
+
+async def test_webhook_starts_workflow_with_delivery_idempotency(client: AsyncClient) -> None:
+    from meow.receiver import app as app_module
+
+    body = _issue_comment_payload(sender_login="alice")
+    response = await client.post(
+        "/gh/webhook",
+        content=body,
+        headers={
+            "X-Hub-Signature-256": _sign(body),
+            "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-xyz-999",
+        },
+    )
+    assert response.status_code == 200
+
+    execute = app_module._workflows_client.workflows.execute_workflow
+    execute.assert_called_once()  # ty: ignore[unresolved-attribute]
+    kwargs = execute.call_args.kwargs  # ty: ignore[unresolved-attribute]
+    assert kwargs["workflow_identifier"] == "GithubEventHandler"
+    assert kwargs["execution_id"] == "issue_comment-delivery-xyz-999"
+    assert kwargs["deployment_name"] == "meow-bot-test"
+    assert kwargs["input"]["event"] == "issue_comment"
+    assert kwargs["input"]["delivery"] == "delivery-xyz-999"
+    assert kwargs["input"]["payload"]["action"] == "created"
+    assert kwargs["input"]["payload"]["sender"]["login"] == "alice"
