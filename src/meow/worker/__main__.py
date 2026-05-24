@@ -1,26 +1,26 @@
 """Entry point for ``python -m meow.worker``.
 
-v0.0.x stub — the real durable worker (``workflows.run_worker``) lands in
-v0.1.0 (spec §7). Until then this module exists so ``docker compose up``
-can boot the ``worker`` service without crashlooping, and so S12's smoke
-test can grep the structured ``worker.started`` log line.
-
-We block on ``signal.pause()`` rather than a ``time.sleep`` loop so SIGTERM
-(sent by ``docker stop`` / ``docker compose down``) returns immediately
-instead of waiting for the next tick.
+Starts a Mistral Workflows worker (spec §7) that registers the workflows
+listed in ``_WORKFLOWS`` and polls for tasks. Requires ``MISTRAL_API_KEY``
+and ``DEPLOYMENT_NAME`` in the environment.
 """
 
 from __future__ import annotations
 
-import signal
+import asyncio
+
+import mistralai.workflows as workflows
 
 from meow.common.logging import get_logger
+from meow.worker.workflows.github_event_handler import GithubEventHandler
+
+_WORKFLOWS = [GithubEventHandler]
 
 
 def main() -> None:
     logger = get_logger("worker")
-    logger.info("worker.started", extra={"mode": "stub"})
-    signal.pause()
+    logger.info("worker.started", extra={"workflows": [w.__name__ for w in _WORKFLOWS]})
+    asyncio.run(workflows.run_worker(_WORKFLOWS))
 
 
 if __name__ == "__main__":

@@ -1,13 +1,12 @@
-"""Tests for the v0.0.x worker stub (`python -m meow.worker`)."""
+"""Tests for the v0.1.0 worker entry point (`python -m meow.worker`)."""
 
 from __future__ import annotations
 
 import io
 import json
 import logging
-import signal
 from collections.abc import Iterator
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -39,16 +38,23 @@ def _capture_worker_log() -> Iterator[io.StringIO]:
         logger.handlers.extend(saved)
 
 
-def test_main_logs_worker_started_then_blocks(_capture_worker_log: io.StringIO) -> None:
+def test_main_starts_worker(_capture_worker_log: io.StringIO) -> None:
     """``main()`` must emit the ``worker.started`` JSON line and then call
-    ``signal.pause()``. We patch ``signal.pause`` to a no-op so the test
-    returns instead of blocking forever — and assert it was invoked."""
+    ``workflows.run_worker`` with the registered workflow classes. We patch
+    ``run_worker`` so the test returns instead of polling forever — and
+    assert it was awaited with the right workflows."""
     from meow.worker import __main__ as worker_main
 
-    with patch.object(signal, "pause", return_value=None) as pause:
+    with patch(
+        "mistralai.workflows.run_worker",
+        new_callable=AsyncMock,
+        return_value=None,
+    ) as run_worker:
         worker_main.main()
 
-    pause.assert_called_once()
+    run_worker.assert_awaited_once_with(worker_main._WORKFLOWS)
+    assert len(worker_main._WORKFLOWS) == 1
+    assert worker_main._WORKFLOWS[0] is worker_main.GithubEventHandler
 
     lines = [line for line in _capture_worker_log.getvalue().splitlines() if line]
     assert len(lines) == 1
@@ -56,4 +62,4 @@ def test_main_logs_worker_started_then_blocks(_capture_worker_log: io.StringIO) 
     assert payload["svc"] == "worker"
     assert payload["event"] == "worker.started"
     assert payload["level"] == "info"
-    assert payload["mode"] == "stub"
+    assert payload["workflows"] == ["GithubEventHandler"]
