@@ -1,4 +1,10 @@
-"""Tests for the ``GithubEventHandler`` workflow entrypoint (story S7)."""
+"""Tests for the ``GithubEventHandler`` workflow entrypoint (story S7).
+
+The workflow under test is sandbox-clean by construction: it never reads
+``os.environ`` and only imports ``githubkit`` via ``imports_passed_through``.
+That makes these tests trivial — no env fixtures needed, ``bot_login`` is
+passed directly via ``GithubEventInput`` like the receiver does in prod.
+"""
 
 from __future__ import annotations
 
@@ -15,20 +21,6 @@ from meow.worker.workflows.github_event_handler import (
     GithubEventInput,
 )
 from tests.fixtures.webhooks import issue_comment_payload
-
-
-@pytest.fixture(autouse=True)
-def _settings_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("MEOW_DOMAIN", "meow.test")
-    monkeypatch.setenv("GITHUB_APP_ID", "1")
-    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "secret")
-    monkeypatch.setenv("MISTRAL_API_KEY", "mk-test")
-    monkeypatch.setenv("DAYTONA_API_KEY", "dk-test")
-    monkeypatch.setenv("DEPLOYMENT_NAME", "meow-bot-test")
-    # Tests opt in to setting MEOW_BOT_LOGIN themselves so we can exercise
-    # the "no_bot_login" branch.
-    monkeypatch.delenv("MEOW_BOT_LOGIN", raising=False)
 
 
 @pytest.fixture
@@ -63,14 +55,16 @@ async def _run(handler: GithubEventHandler, input: GithubEventInput) -> None:
     await handler.run(input)
 
 
-async def test_run_skips_unexpected_event(
-    monkeypatch: pytest.MonkeyPatch, log_buffer: io.StringIO
-) -> None:
-    monkeypatch.setenv("MEOW_BOT_LOGIN", "meow-bot")
+async def test_run_skips_unexpected_event(log_buffer: io.StringIO) -> None:
     handler = GithubEventHandler()
     await _run(
         handler,
-        GithubEventInput(event="push", delivery="del-1", payload={"zen": "ok"}),
+        GithubEventInput(
+            event="push",
+            delivery="del-1",
+            bot_login="meow-bot",
+            payload={"zen": "ok"},
+        ),
     )
 
     events = _events(log_buffer)
@@ -79,14 +73,16 @@ async def test_run_skips_unexpected_event(
     assert events[0]["delivery"] == "del-1"
 
 
-async def test_run_handles_malformed_payload(
-    monkeypatch: pytest.MonkeyPatch, log_buffer: io.StringIO
-) -> None:
-    monkeypatch.setenv("MEOW_BOT_LOGIN", "meow-bot")
+async def test_run_handles_malformed_payload(log_buffer: io.StringIO) -> None:
     handler = GithubEventHandler()
     await _run(
         handler,
-        GithubEventInput(event="issue_comment", delivery="del-2", payload={"bogus": True}),
+        GithubEventInput(
+            event="issue_comment",
+            delivery="del-2",
+            bot_login="meow-bot",
+            payload={"bogus": True},
+        ),
     )
 
     events = _events(log_buffer)
@@ -95,12 +91,16 @@ async def test_run_handles_malformed_payload(
 
 
 async def test_run_warns_when_no_bot_login(log_buffer: io.StringIO) -> None:
-    # MEOW_BOT_LOGIN intentionally unset (see ``_settings_env``).
     handler = GithubEventHandler()
     payload = issue_comment_payload(body="@meow-bot review", is_pr=True)
     await _run(
         handler,
-        GithubEventInput(event="issue_comment", delivery="del-3", payload=payload),
+        GithubEventInput(
+            event="issue_comment",
+            delivery="del-3",
+            bot_login=None,
+            payload=payload,
+        ),
     )
 
     events = _events(log_buffer)
@@ -108,15 +108,17 @@ async def test_run_warns_when_no_bot_login(log_buffer: io.StringIO) -> None:
     assert events[0]["delivery"] == "del-3"
 
 
-async def test_run_logs_no_intent_when_body_doesnt_match(
-    monkeypatch: pytest.MonkeyPatch, log_buffer: io.StringIO
-) -> None:
-    monkeypatch.setenv("MEOW_BOT_LOGIN", "meow-bot")
+async def test_run_logs_no_intent_when_body_doesnt_match(log_buffer: io.StringIO) -> None:
     handler = GithubEventHandler()
     payload = issue_comment_payload(body="just a normal comment", is_pr=True)
     await _run(
         handler,
-        GithubEventInput(event="issue_comment", delivery="del-4", payload=payload),
+        GithubEventInput(
+            event="issue_comment",
+            delivery="del-4",
+            bot_login="meow-bot",
+            payload=payload,
+        ),
     )
 
     events = _events(log_buffer)
@@ -124,15 +126,17 @@ async def test_run_logs_no_intent_when_body_doesnt_match(
     assert events[0]["delivery"] == "del-4"
 
 
-async def test_run_logs_intent_detected(
-    monkeypatch: pytest.MonkeyPatch, log_buffer: io.StringIO
-) -> None:
-    monkeypatch.setenv("MEOW_BOT_LOGIN", "meow-bot")
+async def test_run_logs_intent_detected(log_buffer: io.StringIO) -> None:
     handler = GithubEventHandler()
     payload = issue_comment_payload(body="@meow-bot review please", is_pr=True)
     await _run(
         handler,
-        GithubEventInput(event="issue_comment", delivery="del-5", payload=payload),
+        GithubEventInput(
+            event="issue_comment",
+            delivery="del-5",
+            bot_login="meow-bot",
+            payload=payload,
+        ),
     )
 
     events = _events(log_buffer)
@@ -142,16 +146,20 @@ async def test_run_logs_intent_detected(
 
 
 async def test_run_logs_no_intent_when_comment_is_on_plain_issue(
-    monkeypatch: pytest.MonkeyPatch, log_buffer: io.StringIO
+    log_buffer: io.StringIO,
 ) -> None:
-    monkeypatch.setenv("MEOW_BOT_LOGIN", "meow-bot")
     handler = GithubEventHandler()
     # Same matching body, but ``is_pr=False`` → no ``pull_request`` link →
     # detect_intent returns None.
     payload = issue_comment_payload(body="@meow-bot review", is_pr=False)
     await _run(
         handler,
-        GithubEventInput(event="issue_comment", delivery="del-6", payload=payload),
+        GithubEventInput(
+            event="issue_comment",
+            delivery="del-6",
+            bot_login="meow-bot",
+            payload=payload,
+        ),
     )
 
     events = _events(log_buffer)

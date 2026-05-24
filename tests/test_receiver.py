@@ -226,5 +226,8 @@ async def test_webhook_starts_workflow_with_delivery_idempotency(client: AsyncCl
     assert kwargs["deployment_name"] == "meow-bot-test"
     assert kwargs["input"]["event"] == "issue_comment"
     assert kwargs["input"]["delivery"] == "delivery-xyz-999"
+    # bot_login is injected by the receiver so the workflow never has to
+    # read os.environ (Temporal sandbox forbids it).
+    assert kwargs["input"]["bot_login"] == BOT_LOGIN
     assert kwargs["input"]["payload"]["action"] == "created"
     assert kwargs["input"]["payload"]["sender"]["login"] == "alice"

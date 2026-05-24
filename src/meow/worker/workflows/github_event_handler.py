@@ -1,12 +1,24 @@
 """Top-level GitHub event router workflow.
 
-Receives the raw webhook payload from the receiver, rebuilds the typed
+Receives the webhook payload from the receiver, rebuilds the typed
 githubkit model, and dispatches to the right activity chain based on the
 intent detected in the comment body.
 
 v0.1.0 phase C: only ``MENTION_REVIEW`` is recognised. The activity chain
 (``fetch_pr_context`` → ``run_review_in_sandbox`` → ``post_pr_comment``)
 lands in S8/S9/S10; until then the workflow just logs the match.
+
+Sandbox notes — workflows run inside Temporal's determinism sandbox:
+
+- ``githubkit`` transitively imports ``urllib.request`` (via httpx), which
+  the sandbox blocks at import time. We use it strictly for in-memory
+  Pydantic model rehydration — no network — so the imports are wrapped in
+  ``workflow.unsafe.imports_passed_through()``. This is the use case the
+  context manager is documented for ("third-party library performs side
+  effects at import time"); runtime restrictions stay active.
+- Settings()` (and any other ``os.environ`` read) cannot run here.
+  Anything the workflow needs is injected by the receiver via the
+  ``GithubEventInput`` payload — ``bot_login`` in particular.
 """
 
 from __future__ import annotations
@@ -14,21 +26,31 @@ from __future__ import annotations
 from typing import Any
 
 import mistralai.workflows as workflows
-from githubkit.webhooks import parse_obj
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
-from meow.common.config import Settings
 from meow.common.logging import get_logger
-from meow.worker.intent import detect_intent
+
+# ruff: noqa: E402
+with workflows.workflow.unsafe.imports_passed_through():
+    from githubkit.webhooks import parse_obj
+    from pydantic import ValidationError
+
+    from meow.worker.intent import detect_intent
 
 logger = get_logger("worker")
 
 
 class GithubEventInput(BaseModel):
-    """Payload passed by the receiver to a ``GithubEventHandler`` execution."""
+    """Payload passed by the receiver to a ``GithubEventHandler`` execution.
+
+    ``bot_login`` is injected by the receiver (which reads ``Settings()``
+    freely — it's not inside a sandbox). The workflow never touches the
+    environment directly.
+    """
 
     event: str
     delivery: str
+    bot_login: str | None
     payload: dict[str, Any]
 
 
@@ -58,15 +80,14 @@ class GithubEventHandler:
             )
             return None
 
-        settings = Settings()  # ty: ignore[missing-argument]
-        if not settings.bot_login:
+        if not input.bot_login:
             logger.warning(
                 "workflow.github_event.no_bot_login",
                 extra={"delivery": input.delivery},
             )
             return None
 
-        intent = detect_intent(event, settings.bot_login)
+        intent = detect_intent(event, input.bot_login)
         if intent is None:
             logger.info(
                 "workflow.github_event.no_intent",

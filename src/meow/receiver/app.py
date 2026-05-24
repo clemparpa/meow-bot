@@ -89,6 +89,9 @@ async def gh_webhook(request: Request) -> dict[str, Any]:
         input={
             "event": event,
             "delivery": delivery,
+            # Injected here so the workflow never has to touch os.environ
+            # (Temporal sandbox forbids it). See worker.workflows.github_event_handler.
+            "bot_login": settings.bot_login,
             "payload": parsed.model_dump(mode="json"),
         },
     )
