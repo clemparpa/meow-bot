@@ -1,15 +1,13 @@
 """FastAPI webhook receiver for meow-bot.
 
-Implements the minimal v0.0.x receiver described in `spec.md` §6 and
-``stories/v0.0.x.md`` (S6):
+Implements the v0.1.0 receiver described in ``spec.md`` §6 and
+``stories/v0.1.0.md`` (S6):
 
 - ``GET /healthz`` for liveness probes.
 - ``POST /gh/webhook`` validates the HMAC-SHA256 signature, filters
-  self-deliveries and unhandled events, then logs ``webhook.accepted``
-  and returns ``{"queued": true}``.
-
-No call to Mistral Workflows or Daytona is made at this stage — the
-"queued" status is a stub that will be wired to the worker in v0.1.0.
+  self-deliveries and unhandled events, then starts a Mistral Workflows
+  execution of ``GithubEventHandler`` (idempotent on
+  ``X-GitHub-Delivery``) before returning ``{"queued": true, ...}``.
 """
 
 from __future__ import annotations
@@ -19,6 +17,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from githubkit.webhooks import parse
+from mistralai.client import Mistral
 from pydantic import ValidationError
 
 from meow.common.config import Settings
@@ -28,7 +27,12 @@ from meow.common.logging import get_logger
 settings = Settings()  # ty: ignore[missing-argument]
 logger = get_logger("receiver")
 
-app = FastAPI(title="meow-receiver", version="0.0.1")
+# Module-level client: keeps the HTTP session warm between requests and
+# avoids re-validating the API key on every webhook. Errors from
+# `execute_workflow` (e.g. 401) surface at first webhook, not at boot.
+_workflows_client: Mistral = Mistral(api_key=settings.mistral_api_key)
+
+app = FastAPI(title="meow-receiver", version="0.1.0")
 
 _HANDLED_EVENTS: frozenset[str] = frozenset({"issue_comment"})
 
@@ -91,8 +95,23 @@ async def gh_webhook(request: Request) -> dict[str, Any]:
         )
         return {"skipped": "self"}
 
+    execution = _workflows_client.workflows.execute_workflow(
+        workflow_identifier="GithubEventHandler",
+        execution_id=f"{event}-{delivery}",
+        deployment_name=settings.deployment_name,
+        input={
+            "event": event,
+            "delivery": delivery,
+            "payload": parsed.model_dump(mode="json"),
+        },
+    )
+
     logger.info(
         "webhook.accepted",
-        extra={"gh_event": event, "delivery": delivery},
+        extra={
+            "gh_event": event,
+            "delivery": delivery,
+            "execution_id": execution.execution_id,
+        },
     )
-    return {"queued": True}
+    return {"queued": True, "execution_id": execution.execution_id}
