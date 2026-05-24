@@ -1,9 +1,9 @@
 """Tests for the ``GithubEventHandler`` workflow entrypoint (story S7).
 
 The workflow under test is sandbox-clean by construction: it never reads
-``os.environ`` and only imports ``githubkit`` via ``imports_passed_through``.
-That makes these tests trivial — no env fixtures needed, ``bot_login`` is
-passed directly via ``GithubEventInput`` like the receiver does in prod.
+``os.environ`` and never imports ``githubkit``. ``bot_login``,
+``comment_body`` and ``is_pr`` are passed directly via
+``GithubEventInput``, mirroring what the receiver does in production.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import io
 import json
 import logging
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -20,7 +21,25 @@ from meow.worker.workflows.github_event_handler import (
     GithubEventHandler,
     GithubEventInput,
 )
-from tests.fixtures.webhooks import issue_comment_payload
+
+
+def _make_input(
+    *,
+    event: str = "issue_comment",
+    delivery: str = "del-0",
+    bot_login: str | None = "meow-bot",
+    comment_body: str | None = "hello",
+    is_pr: bool = True,
+    payload: dict[str, Any] | None = None,
+) -> GithubEventInput:
+    return GithubEventInput(
+        event=event,
+        delivery=delivery,
+        bot_login=bot_login,
+        comment_body=comment_body,
+        is_pr=is_pr,
+        payload=payload if payload is not None else {},
+    )
 
 
 @pytest.fixture
@@ -57,15 +76,7 @@ async def _run(handler: GithubEventHandler, input: GithubEventInput) -> None:
 
 async def test_run_skips_unexpected_event(log_buffer: io.StringIO) -> None:
     handler = GithubEventHandler()
-    await _run(
-        handler,
-        GithubEventInput(
-            event="push",
-            delivery="del-1",
-            bot_login="meow-bot",
-            payload={"zen": "ok"},
-        ),
-    )
+    await _run(handler, _make_input(event="push", delivery="del-1"))
 
     events = _events(log_buffer)
     assert [e["event"] for e in events] == ["workflow.github_event.unexpected_event"]
@@ -73,34 +84,11 @@ async def test_run_skips_unexpected_event(log_buffer: io.StringIO) -> None:
     assert events[0]["delivery"] == "del-1"
 
 
-async def test_run_handles_malformed_payload(log_buffer: io.StringIO) -> None:
-    handler = GithubEventHandler()
-    await _run(
-        handler,
-        GithubEventInput(
-            event="issue_comment",
-            delivery="del-2",
-            bot_login="meow-bot",
-            payload={"bogus": True},
-        ),
-    )
-
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["workflow.github_event.malformed_payload"]
-    assert events[0]["delivery"] == "del-2"
-
-
 async def test_run_warns_when_no_bot_login(log_buffer: io.StringIO) -> None:
     handler = GithubEventHandler()
-    payload = issue_comment_payload(body="@meow-bot review", is_pr=True)
     await _run(
         handler,
-        GithubEventInput(
-            event="issue_comment",
-            delivery="del-3",
-            bot_login=None,
-            payload=payload,
-        ),
+        _make_input(delivery="del-3", bot_login=None, comment_body="@meow-bot review"),
     )
 
     events = _events(log_buffer)
@@ -110,16 +98,7 @@ async def test_run_warns_when_no_bot_login(log_buffer: io.StringIO) -> None:
 
 async def test_run_logs_no_intent_when_body_doesnt_match(log_buffer: io.StringIO) -> None:
     handler = GithubEventHandler()
-    payload = issue_comment_payload(body="just a normal comment", is_pr=True)
-    await _run(
-        handler,
-        GithubEventInput(
-            event="issue_comment",
-            delivery="del-4",
-            bot_login="meow-bot",
-            payload=payload,
-        ),
-    )
+    await _run(handler, _make_input(delivery="del-4", comment_body="just a normal comment"))
 
     events = _events(log_buffer)
     assert [e["event"] for e in events] == ["workflow.github_event.no_intent"]
@@ -128,15 +107,9 @@ async def test_run_logs_no_intent_when_body_doesnt_match(log_buffer: io.StringIO
 
 async def test_run_logs_intent_detected(log_buffer: io.StringIO) -> None:
     handler = GithubEventHandler()
-    payload = issue_comment_payload(body="@meow-bot review please", is_pr=True)
     await _run(
         handler,
-        GithubEventInput(
-            event="issue_comment",
-            delivery="del-5",
-            bot_login="meow-bot",
-            payload=payload,
-        ),
+        _make_input(delivery="del-5", comment_body="@meow-bot review please"),
     )
 
     events = _events(log_buffer)
@@ -149,17 +122,10 @@ async def test_run_logs_no_intent_when_comment_is_on_plain_issue(
     log_buffer: io.StringIO,
 ) -> None:
     handler = GithubEventHandler()
-    # Same matching body, but ``is_pr=False`` → no ``pull_request`` link →
-    # detect_intent returns None.
-    payload = issue_comment_payload(body="@meow-bot review", is_pr=False)
+    # Same matching body, but is_pr=False — detect_intent returns None.
     await _run(
         handler,
-        GithubEventInput(
-            event="issue_comment",
-            delivery="del-6",
-            bot_login="meow-bot",
-            payload=payload,
-        ),
+        _make_input(delivery="del-6", comment_body="@meow-bot review", is_pr=False),
     )
 
     events = _events(log_buffer)

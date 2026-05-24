@@ -206,7 +206,7 @@ async def test_webhook_malformed_payload_returns_400(client: AsyncClient) -> Non
 async def test_webhook_starts_workflow_with_delivery_idempotency(client: AsyncClient) -> None:
     from meow.receiver import app as app_module
 
-    body = issue_comment_body(sender_login="alice")
+    body = issue_comment_body(sender_login="alice", body="@meow-bot review", is_pr=True)
     response = await client.post(
         "/gh/webhook",
         content=body,
@@ -226,8 +226,31 @@ async def test_webhook_starts_workflow_with_delivery_idempotency(client: AsyncCl
     assert kwargs["deployment_name"] == "meow-bot-test"
     assert kwargs["input"]["event"] == "issue_comment"
     assert kwargs["input"]["delivery"] == "delivery-xyz-999"
-    # bot_login is injected by the receiver so the workflow never has to
-    # read os.environ (Temporal sandbox forbids it).
+    # These three are injected by the receiver so the workflow never has
+    # to read os.environ or import githubkit (Temporal sandbox forbids
+    # both). See worker.workflows.github_event_handler.
     assert kwargs["input"]["bot_login"] == BOT_LOGIN
+    assert kwargs["input"]["comment_body"] == "@meow-bot review"
+    assert kwargs["input"]["is_pr"] is True
     assert kwargs["input"]["payload"]["action"] == "created"
     assert kwargs["input"]["payload"]["sender"]["login"] == "alice"
+
+
+async def test_webhook_marks_plain_issue_as_not_pr(client: AsyncClient) -> None:
+    from meow.receiver import app as app_module
+
+    body = issue_comment_body(sender_login="alice", body="hello", is_pr=False)
+    response = await client.post(
+        "/gh/webhook",
+        content=body,
+        headers={
+            "X-Hub-Signature-256": _sign(body),
+            "X-GitHub-Event": "issue_comment",
+            "X-GitHub-Delivery": "delivery-issue-1",
+        },
+    )
+    assert response.status_code == 200
+
+    kwargs = app_module._workflows_client.workflows.execute_workflow.call_args.kwargs  # ty: ignore[unresolved-attribute]
+    assert kwargs["input"]["is_pr"] is False
+    assert kwargs["input"]["comment_body"] == "hello"

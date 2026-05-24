@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from githubkit.utils import UNSET
 from githubkit.webhooks import parse
 from mistralai.client import Mistral
 from pydantic import ValidationError
@@ -82,6 +83,16 @@ async def gh_webhook(request: Request) -> dict[str, Any]:
         )
         return {"skipped": "self"}
 
+    # Extract here what the workflow needs to decide its route — the workflow
+    # runs in the Temporal determinism sandbox and cannot import githubkit
+    # itself (lazy submodules touch os.getenv at runtime). The full payload
+    # is still forwarded for downstream activities, which run outside the
+    # sandbox and may re-parse it via githubkit freely.
+    # ty's view of `parse(event, body)` is the union of every webhook model,
+    # so the chained attributes resolve to Unknown — annotate the narrowing.
+    comment_body: str | None = parsed.comment.body  # ty: ignore[unresolved-attribute]
+    is_pr = parsed.issue.pull_request is not UNSET
+
     execution = _workflows_client.workflows.execute_workflow(
         workflow_identifier="GithubEventHandler",
         execution_id=f"{event}-{delivery}",
@@ -89,9 +100,9 @@ async def gh_webhook(request: Request) -> dict[str, Any]:
         input={
             "event": event,
             "delivery": delivery,
-            # Injected here so the workflow never has to touch os.environ
-            # (Temporal sandbox forbids it). See worker.workflows.github_event_handler.
             "bot_login": settings.bot_login,
+            "comment_body": comment_body,
+            "is_pr": is_pr,
             "payload": parsed.model_dump(mode="json"),
         },
     )
