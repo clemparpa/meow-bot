@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     - ``DEPLOYMENT_NAME`` — Mistral Workflows deployment grouping the
       receiver and worker(s) of one service together (spec §7). Consumed
       by ``mistralai.workflows.run_worker`` at boot.
+    - ``MEOW_BOT_LOGIN`` — GitHub login of the bot, used by the self-event
+      filter (receiver) and the mention regex (worker). Optional until the
+      ``GET /app`` lookup lands; missing means anti-loop + intent detection
+      become no-ops with a warning.
     """
 
     model_config = SettingsConfigDict(
@@ -43,3 +47,11 @@ class Settings(BaseSettings):
     daytona_api_key: str = Field(min_length=1)
     github_app_private_key_path: str = Field(default="/secrets/github-app.pem", min_length=1)
     deployment_name: str = Field(min_length=1)
+    # Alias to ``MEOW_BOT_LOGIN`` so the env var follows the ``MEOW_*`` prefix
+    # convention shared with ``MEOW_DOMAIN``; the Python attribute stays the
+    # short ``bot_login`` for ergonomic call sites.
+    bot_login: str | None = Field(
+        default=None,
+        min_length=1,
+        validation_alias="MEOW_BOT_LOGIN",
+    )

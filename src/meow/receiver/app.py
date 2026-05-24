@@ -12,10 +12,10 @@ Implements the v0.1.0 receiver described in ``spec.md`` §6 and
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from githubkit.utils import UNSET
 from githubkit.webhooks import parse
 from mistralai.client import Mistral
 from pydantic import ValidationError
@@ -35,17 +35,6 @@ _workflows_client: Mistral = Mistral(api_key=settings.mistral_api_key)
 app = FastAPI(title="meow-receiver", version="0.1.0")
 
 _HANDLED_EVENTS: frozenset[str] = frozenset({"issue_comment"})
-
-
-def _bot_login() -> str | None:
-    """Return the configured bot login, or ``None`` when unknown.
-
-    Stub for v0.0.x — reads ``MEOW_BOT_LOGIN`` from the environment so
-    the self-event filter can be exercised in tests. In v0.1.0 this will
-    be replaced by a call to ``GET /app`` against the GitHub API.
-    """
-    value = os.environ.get("MEOW_BOT_LOGIN")
-    return value or None
 
 
 @app.get("/healthz")
@@ -87,13 +76,22 @@ async def gh_webhook(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="malformed webhook payload") from None
 
     sender_login = parsed.sender.login if parsed.sender else None
-    bot = _bot_login()
-    if bot and sender_login == bot:
+    if settings.bot_login and sender_login == settings.bot_login:
         logger.info(
             "webhook.skipped",
             extra={"reason": "self", "delivery": delivery, "gh_event": event},
         )
         return {"skipped": "self"}
+
+    # Extract here what the workflow needs to decide its route — the workflow
+    # runs in the Temporal determinism sandbox and cannot import githubkit
+    # itself (lazy submodules touch os.getenv at runtime). The full payload
+    # is still forwarded for downstream activities, which run outside the
+    # sandbox and may re-parse it via githubkit freely.
+    # ty's view of `parse(event, body)` is the union of every webhook model,
+    # so the chained attributes resolve to Unknown — annotate the narrowing.
+    comment_body: str | None = parsed.comment.body  # ty: ignore[unresolved-attribute]
+    is_pr = parsed.issue.pull_request is not UNSET
 
     execution = _workflows_client.workflows.execute_workflow(
         workflow_identifier="GithubEventHandler",
@@ -102,6 +100,9 @@ async def gh_webhook(request: Request) -> dict[str, Any]:
         input={
             "event": event,
             "delivery": delivery,
+            "bot_login": settings.bot_login,
+            "comment_body": comment_body,
+            "is_pr": is_pr,
             "payload": parsed.model_dump(mode="json"),
         },
     )

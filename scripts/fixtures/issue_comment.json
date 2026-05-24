@@ -2,7 +2,7 @@
   "action": "created",
   "comment": {
     "author_association": "NONE",
-    "body": "hello",
+    "body": "@meow-bot review",
     "created_at": "2024-01-01T00:00:00Z",
     "html_url": "https://github.com/octocat/hello/issues/1#issuecomment-1",
     "id": 1,
@@ -47,6 +47,13 @@
     "milestone": null,
     "node_id": "I_kwDOABCD",
     "number": 1,
+    "pull_request": {
+      "url": "https://api.github.com/repos/octocat/hello/pulls/1",
+      "html_url": "https://github.com/octocat/hello/pull/1",
+      "diff_url": "https://github.com/octocat/hello/pull/1.diff",
+      "patch_url": "https://github.com/octocat/hello/pull/1.patch",
+      "merged_at": null
+    },
     "reactions": {
       "+1": 0,
       "-1": 0,

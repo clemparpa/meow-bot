@@ -48,6 +48,9 @@ jobs:
           MISTRAL_API_KEY=$MISTRAL_API_KEY
           DEPLOYMENT_NAME=meow-bot-ci
           DAYTONA_API_KEY=ci-placeholder
+          # Must match the bot login in scripts/fixtures/issue_comment.json
+          # so the workflow's regex matches and we exercise the happy path.
+          MEOW_BOT_LOGIN=meow-bot
           EOF
 
       - name: Boot stack
@@ -70,10 +73,14 @@ jobs:
         # finishes booting. We need:
         #   1. the SDK's `connected to temporal frontend` log line
         #      (proves the worker reached the scheduler and registered),
-        #   2. one heartbeat cycle (~10s) so the deployment shows up as
-        #      "active" on the REST API the receiver hits — otherwise
-        #      `execute_workflow` returns `404 Workflow not found`
+        #   2. several heartbeat cycles (~10s each) so the deployment is
+        #      reflected on the REST API the receiver hits — otherwise
+        #      `execute_workflow` returns `404 Deployment not found`
         #      (cf. mistral-workflows Deployments.md, lifecycle section).
+        # 15s was on the edge of "1 cycle + propagation" and flaked once
+        # on a green branch (the PR for S7); 30s gives 2-3 cycles of
+        # margin. The retry loop in scripts/curl-webhook.sh is the second
+        # line of defense if propagation drags further.
         run: |
           for _ in $(seq 1 60); do
             if docker compose logs worker | grep -q "connected to temporal frontend"; then
@@ -87,8 +94,8 @@ jobs:
             docker compose logs worker
             exit 1
           fi
-          echo "Sleeping 15s so the first heartbeat propagates to api.mistral.ai"
-          sleep 15
+          echo "Sleeping 30s so heartbeats propagate to api.mistral.ai"
+          sleep 30
 
       - name: POST signed webhook
         env:
@@ -103,19 +110,23 @@ jobs:
             exit 1
           fi
 
-      - name: Assert workflow.github_event.received in worker logs
+      - name: Assert workflow.intent.detected in worker logs
         # Receiver returned 200 immediately after `execute_workflow`, but
-        # the worker still has to pull the task from the queue. Poll for
-        # up to 30s.
+        # the worker still has to pull the task from the queue. The fixture
+        # payload (scripts/fixtures/issue_comment.json) carries a body
+        # matching `@meow-bot review` on a PR, and `.env` sets
+        # `MEOW_BOT_LOGIN=meow-bot`, so the happy path lands on
+        # `workflow.intent.detected` with intent=mention_review.
         run: |
           for _ in $(seq 1 30); do
-            if docker compose logs worker | grep -q '"event": "workflow.github_event.received"'; then
-              echo "worker processed event"
+            if docker compose logs worker | grep -q '"event": "workflow.intent.detected"'; then
+              echo "worker detected intent"
+              docker compose logs worker | grep '"event": "workflow.intent.detected"' | tail -1
               exit 0
             fi
             sleep 1
           done
-          echo "::error::workflow.github_event.received log line not found in worker"
+          echo "::error::workflow.intent.detected log line not found in worker"
           docker compose logs worker
           exit 1
 
