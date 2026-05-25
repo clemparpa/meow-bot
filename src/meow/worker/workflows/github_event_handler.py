@@ -22,11 +22,18 @@ import mistralai.workflows as workflows
 from pydantic import BaseModel
 
 from meow.common.logging import get_logger
-from meow.worker.activities.fetch_pr_context import fetch_pr_context
-from meow.worker.activities.post_pr_comment import post_pr_comment
-from meow.worker.activities.run_review_in_sandbox import run_review_in_sandbox
 from meow.worker.intent import detect_intent
 from meow.worker.types import MeowConfig
+
+# The three activities transitively import githubkit → httpx → urllib.request,
+# which the Temporal sandbox refuses to validate at workflow registration time.
+# ``imports_passed_through`` tells the sandbox these modules are only used
+# from activities (which run outside the sandbox) — the workflow itself
+# never executes their code, it just dispatches.
+with workflows.workflow.unsafe.imports_passed_through():
+    from meow.worker.activities.fetch_pr_context import fetch_pr_context
+    from meow.worker.activities.post_pr_comment import post_pr_comment
+    from meow.worker.activities.run_review_in_sandbox import run_review_in_sandbox
 
 logger = get_logger("worker")
 
