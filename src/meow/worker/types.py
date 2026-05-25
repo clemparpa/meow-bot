@@ -19,6 +19,7 @@ class PrContext(BaseModel):
     ``run_review_in_sandbox`` (S9/S12) and ``post_pr_comment`` (S10).
     """
 
+    installation_id: int = Field(ge=1)
     repo_full_name: str = Field(min_length=1)
     pr_number: int = Field(ge=1)
     base_sha: str = Field(min_length=1)

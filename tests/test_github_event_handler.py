@@ -150,6 +150,7 @@ _STUB_COMMENT_URL = "https://github.com/octocat/hello/issues/42#issuecomment-1"
 def patch_activities(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
     """Replace the 3 activities at the workflow module's import site."""
     ctx = PrContext(
+        installation_id=99,
         repo_full_name="octocat/hello",
         pr_number=42,
         base_sha="b" * 40,
@@ -241,6 +242,7 @@ async def test_run_review_chain_parses_meow_yml_from_context(
     # called by the workflow and the resulting MeowConfig (not defaults)
     # is what run_review_in_sandbox receives.
     ctx = PrContext(
+        installation_id=99,
         repo_full_name="octocat/hello",
         pr_number=42,
         base_sha="b" * 40,

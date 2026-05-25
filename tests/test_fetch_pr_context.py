@@ -123,6 +123,7 @@ async def test_returns_full_pr_context(patch_installation_client: MagicMock) -> 
     ctx = await fetch_pr_context(42, "octocat", "hello", 7)
 
     assert isinstance(ctx, PrContext)
+    assert ctx.installation_id == 42
     assert ctx.repo_full_name == "octocat/hello"
     assert ctx.pr_number == 7
     assert ctx.base_sha == _BASE_SHA

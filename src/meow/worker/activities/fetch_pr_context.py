@@ -71,6 +71,7 @@ async def fetch_pr_context(
             },
         )
         return PrContext(
+            installation_id=installation_id,
             repo_full_name=f"{owner}/{repo}",
             pr_number=pr_number,
             base_sha=base_sha,
