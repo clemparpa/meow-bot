@@ -14,14 +14,20 @@ from pydantic import BaseModel, Field
 
 
 class PrContext(BaseModel):
-    """Minimal stub — extended in S8.
+    """Snapshot of a PR's diff + repo-level config at the time of review.
 
-    S8 adds: ``base_sha``, ``head_sha``, ``diff: str``,
-    ``meow_yml_raw: str | None``.
+    Produced by ``fetch_pr_context`` (S8), consumed by
+    ``run_review_in_sandbox`` (S9/S12) and ``post_pr_comment`` (S10).
     """
 
     repo_full_name: str = Field(min_length=1)
     pr_number: int = Field(ge=1)
+    base_sha: str = Field(min_length=1)
+    head_sha: str = Field(min_length=1)
+    # An empty diff is a valid edge case (e.g. a PR that only changes the
+    # title or labels), so no min_length here.
+    diff: str
+    meow_yml_raw: str | None = None
 
 
 class MeowConfig(BaseModel):
