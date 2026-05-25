@@ -211,12 +211,12 @@ async def test_run_review_chain_passes_report_to_post_comment(
     assert post_call.args[3] is review_return
 
 
-async def test_run_review_chain_uses_default_meow_config(
+async def test_run_review_chain_passes_default_config_when_no_meow_yml(
     patch_activities: dict[str, AsyncMock],
 ) -> None:
-    # S13 has not landed yet, so the workflow ignores ctx.meow_yml_raw and
-    # passes a vanilla MeowConfig() to run_review_in_sandbox. This test
-    # documents the invariant so we notice when S13 changes it.
+    # ctx.meow_yml_raw is None in the default patch_activities fixture, so
+    # parse_meow_yml falls back to defaults. The workflow must pass those
+    # defaults through unchanged to run_review_in_sandbox.
     handler = GithubEventHandler()
     await _run(
         handler,
@@ -231,7 +231,44 @@ async def test_run_review_chain_uses_default_meow_config(
     assert review_call is not None
     meow_config = review_call.args[1]
     assert isinstance(meow_config, MeowConfig)
-    assert meow_config == MeowConfig()  # all defaults
+    assert meow_config == MeowConfig()
+
+
+async def test_run_review_chain_parses_meow_yml_from_context(
+    patch_activities: dict[str, AsyncMock],
+) -> None:
+    # When PrContext carries a meow_yml_raw payload, parse_meow_yml is
+    # called by the workflow and the resulting MeowConfig (not defaults)
+    # is what run_review_in_sandbox receives.
+    ctx = PrContext(
+        repo_full_name="octocat/hello",
+        pr_number=42,
+        base_sha="b" * 40,
+        head_sha="h" * 40,
+        diff="diff --git a/x b/x\n",
+        meow_yml_raw="model: mistral-large-2.6\nmax_turns: 7\nexclude_paths:\n  - vendor/**\n",
+    )
+    patch_activities["fetch_pr_context"].return_value = ctx
+
+    handler = GithubEventHandler()
+    await _run(
+        handler,
+        _make_input(
+            delivery="del-chain-3b",
+            comment_body="@meow-bot review",
+            payload=_pr_payload(),
+        ),
+    )
+
+    review_call = patch_activities["run_review_in_sandbox"].await_args
+    assert review_call is not None
+    meow_config = review_call.args[1]
+    assert isinstance(meow_config, MeowConfig)
+    assert meow_config.model == "mistral-large-2.6"
+    assert meow_config.max_turns == 7
+    assert meow_config.exclude_paths == ["vendor/**"]
+    # Unspecified fields keep their defaults.
+    assert meow_config.max_price_usd == MeowConfig().max_price_usd
 
 
 async def test_run_review_chain_logs_review_posted(
