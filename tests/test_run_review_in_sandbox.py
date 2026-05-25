@@ -18,6 +18,16 @@ from meow.worker.activities.run_review_in_sandbox import (
 from meow.worker.types import MeowConfig, PrContext, ReviewReport
 
 
+def _ctx(*, repo: str = "octocat/hello", pr: int = 42) -> PrContext:
+    return PrContext(
+        repo_full_name=repo,
+        pr_number=pr,
+        base_sha="b" * 40,
+        head_sha="h" * 40,
+        diff="diff --git a/x b/x\n",
+    )
+
+
 @pytest.fixture
 def log_buffer() -> Iterator[io.StringIO]:
     buf = io.StringIO()
@@ -45,10 +55,7 @@ def _events(buf: io.StringIO) -> list[dict]:
 async def test_returns_stub_report() -> None:
     # ``@workflows.activity()`` only attaches metadata — the coroutine is
     # awaitable directly, no worker harness needed for a stub.
-    report = await run_review_in_sandbox(
-        PrContext(repo_full_name="octocat/hello", pr_number=42),
-        MeowConfig(),
-    )
+    report = await run_review_in_sandbox(_ctx(), MeowConfig())
 
     assert isinstance(report, ReviewReport)
     assert report.body == _STUB_BODY
@@ -57,7 +64,7 @@ async def test_returns_stub_report() -> None:
 
 async def test_logs_inputs(log_buffer: io.StringIO) -> None:
     await run_review_in_sandbox(
-        PrContext(repo_full_name="octocat/hello", pr_number=7),
+        _ctx(pr=7),
         MeowConfig(max_turns=20, max_price_usd=1.25),
     )
 
@@ -78,7 +85,12 @@ def test_review_report_roundtrip() -> None:
 
 
 def test_pr_context_rejects_invalid() -> None:
+    sha = "a" * 40
     with pytest.raises(ValidationError):
-        PrContext(repo_full_name="", pr_number=1)
+        PrContext(repo_full_name="", pr_number=1, base_sha=sha, head_sha=sha, diff="")
     with pytest.raises(ValidationError):
-        PrContext(repo_full_name="octocat/hello", pr_number=0)
+        PrContext(repo_full_name="r", pr_number=0, base_sha=sha, head_sha=sha, diff="")
+    with pytest.raises(ValidationError):
+        PrContext(repo_full_name="r", pr_number=1, base_sha="", head_sha=sha, diff="")
+    with pytest.raises(ValidationError):
+        PrContext(repo_full_name="r", pr_number=1, base_sha=sha, head_sha="", diff="")
