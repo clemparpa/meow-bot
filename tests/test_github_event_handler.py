@@ -1,9 +1,14 @@
-"""Tests for the ``GithubEventHandler`` workflow entrypoint (story S7).
+"""Tests for the ``GithubEventHandler`` workflow entrypoint (stories S7, S10.5).
 
 The workflow under test is sandbox-clean by construction: it never reads
 ``os.environ`` and never imports ``githubkit``. ``bot_login``,
 ``comment_body`` and ``is_pr`` are passed directly via
 ``GithubEventInput``, mirroring what the receiver does in production.
+
+S10.5 wires the ``MENTION_REVIEW`` branch to the activity chain. We test
+that branch by patching the three activities at their import site in the
+workflow module — the ``@workflows.activity()`` decorator preserves the
+underlying coroutine, so ``AsyncMock`` substitutes cleanly.
 """
 
 from __future__ import annotations
@@ -13,10 +18,13 @@ import json
 import logging
 from collections.abc import Iterator
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from meow.common.logging import _HANDLER_SENTINEL, JsonFormatter
+from meow.worker.types import MeowConfig, PrContext, ReviewReport
+from meow.worker.workflows import github_event_handler as workflow_module
 from meow.worker.workflows.github_event_handler import (
     GithubEventHandler,
     GithubEventInput,
@@ -40,6 +48,20 @@ def _make_input(
         is_pr=is_pr,
         payload=payload if payload is not None else {},
     )
+
+
+def _pr_payload(
+    *,
+    installation_id: int = 99,
+    repo: str = "octocat/hello",
+    pr: int = 42,
+) -> dict[str, Any]:
+    """Minimal webhook payload shape the workflow extracts coords from."""
+    return {
+        "installation": {"id": installation_id},
+        "repository": {"full_name": repo},
+        "issue": {"number": pr},
+    }
 
 
 @pytest.fixture
@@ -105,19 +127,6 @@ async def test_run_logs_no_intent_when_body_doesnt_match(log_buffer: io.StringIO
     assert events[0]["delivery"] == "del-4"
 
 
-async def test_run_logs_intent_detected(log_buffer: io.StringIO) -> None:
-    handler = GithubEventHandler()
-    await _run(
-        handler,
-        _make_input(delivery="del-5", comment_body="@meow-bot review please"),
-    )
-
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["workflow.intent.detected"]
-    assert events[0]["intent"] == "mention_review"
-    assert events[0]["delivery"] == "del-5"
-
-
 async def test_run_logs_no_intent_when_comment_is_on_plain_issue(
     log_buffer: io.StringIO,
 ) -> None:
@@ -130,3 +139,141 @@ async def test_run_logs_no_intent_when_comment_is_on_plain_issue(
 
     events = _events(log_buffer)
     assert [e["event"] for e in events] == ["workflow.github_event.no_intent"]
+
+
+# --- S10.5: review chain wiring -------------------------------------------
+
+_STUB_COMMENT_URL = "https://github.com/octocat/hello/issues/42#issuecomment-1"
+
+
+@pytest.fixture
+def patch_activities(monkeypatch: pytest.MonkeyPatch) -> dict[str, AsyncMock]:
+    """Replace the 3 activities at the workflow module's import site."""
+    ctx = PrContext(
+        repo_full_name="octocat/hello",
+        pr_number=42,
+        base_sha="b" * 40,
+        head_sha="h" * 40,
+        diff="diff --git a/x b/x\n",
+    )
+    report = ReviewReport(body="stub review", terminated_early=False)
+
+    mocks = {
+        "fetch_pr_context": AsyncMock(return_value=ctx),
+        "run_review_in_sandbox": AsyncMock(return_value=report),
+        "post_pr_comment": AsyncMock(return_value=_STUB_COMMENT_URL),
+    }
+    for name, mock in mocks.items():
+        monkeypatch.setattr(workflow_module, name, mock)
+    return mocks
+
+
+async def test_run_review_chain_calls_all_activities_in_order(
+    patch_activities: dict[str, AsyncMock],
+) -> None:
+    handler = GithubEventHandler()
+    await _run(
+        handler,
+        _make_input(
+            delivery="del-chain-1",
+            comment_body="@meow-bot review",
+            payload=_pr_payload(installation_id=99, repo="octocat/hello", pr=42),
+        ),
+    )
+
+    patch_activities["fetch_pr_context"].assert_awaited_once_with(99, "octocat", "hello", 42)
+    # post_pr_comment takes (installation_id, repo_full_name, pr_number, report)
+    post_call = patch_activities["post_pr_comment"].await_args
+    assert post_call is not None
+    assert post_call.args[0] == 99
+    assert post_call.args[1] == "octocat/hello"
+    assert post_call.args[2] == 42
+
+
+async def test_run_review_chain_passes_report_to_post_comment(
+    patch_activities: dict[str, AsyncMock],
+) -> None:
+    handler = GithubEventHandler()
+    await _run(
+        handler,
+        _make_input(
+            delivery="del-chain-2",
+            comment_body="@meow-bot review",
+            payload=_pr_payload(),
+        ),
+    )
+
+    review_return = patch_activities["run_review_in_sandbox"].return_value
+    post_call = patch_activities["post_pr_comment"].await_args
+    assert post_call is not None
+    # The ReviewReport returned by run_review_in_sandbox must flow through
+    # to post_pr_comment as its 4th positional arg — same object identity.
+    assert post_call.args[3] is review_return
+
+
+async def test_run_review_chain_uses_default_meow_config(
+    patch_activities: dict[str, AsyncMock],
+) -> None:
+    # S13 has not landed yet, so the workflow ignores ctx.meow_yml_raw and
+    # passes a vanilla MeowConfig() to run_review_in_sandbox. This test
+    # documents the invariant so we notice when S13 changes it.
+    handler = GithubEventHandler()
+    await _run(
+        handler,
+        _make_input(
+            delivery="del-chain-3",
+            comment_body="@meow-bot review",
+            payload=_pr_payload(),
+        ),
+    )
+
+    review_call = patch_activities["run_review_in_sandbox"].await_args
+    assert review_call is not None
+    meow_config = review_call.args[1]
+    assert isinstance(meow_config, MeowConfig)
+    assert meow_config == MeowConfig()  # all defaults
+
+
+async def test_run_review_chain_logs_review_posted(
+    patch_activities: dict[str, AsyncMock],
+    log_buffer: io.StringIO,
+) -> None:
+    handler = GithubEventHandler()
+    await _run(
+        handler,
+        _make_input(
+            delivery="del-chain-4",
+            comment_body="@meow-bot review",
+            payload=_pr_payload(),
+        ),
+    )
+
+    events = _events(log_buffer)
+    assert [e["event"] for e in events] == [
+        "workflow.intent.detected",
+        "workflow.review_posted",
+    ]
+    assert events[0]["intent"] == "mention_review"
+    posted = events[1]
+    assert posted["delivery"] == "del-chain-4"
+    assert posted["comment_url"] == _STUB_COMMENT_URL
+    assert posted["terminated_early"] is False
+
+
+async def test_run_review_chain_raises_on_malformed_payload(
+    patch_activities: dict[str, AsyncMock],
+) -> None:
+    # Missing the "installation" key — a contract violation, not a runtime
+    # hazard worth defending against. KeyError must propagate so the
+    # workflow execution fails loudly rather than silently dropping work.
+    handler = GithubEventHandler()
+    with pytest.raises(KeyError):
+        await _run(
+            handler,
+            _make_input(
+                delivery="del-chain-5",
+                comment_body="@meow-bot review",
+                payload={"repository": {"full_name": "x/y"}, "issue": {"number": 1}},
+            ),
+        )
+    patch_activities["fetch_pr_context"].assert_not_awaited()
