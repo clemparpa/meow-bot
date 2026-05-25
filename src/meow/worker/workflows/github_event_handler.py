@@ -23,14 +23,15 @@ from pydantic import BaseModel
 
 from meow.common.logging import get_logger
 from meow.worker.intent import detect_intent
-from meow.worker.types import MeowConfig
 
 # The three activities transitively import githubkit → httpx → urllib.request,
 # which the Temporal sandbox refuses to validate at workflow registration time.
 # ``imports_passed_through`` tells the sandbox these modules are only used
 # from activities (which run outside the sandbox) — the workflow itself
-# never executes their code, it just dispatches.
+# never executes their code, it just dispatches. ``parse_meow_yml`` is pure
+# but pulls in pyyaml, which transitively touches I/O modules — same fix.
 with workflows.workflow.unsafe.imports_passed_through():
+    from meow.common.meow_yml import parse_meow_yml
     from meow.worker.activities.fetch_pr_context import fetch_pr_context
     from meow.worker.activities.post_pr_comment import post_pr_comment
     from meow.worker.activities.run_review_in_sandbox import run_review_in_sandbox
@@ -116,7 +117,8 @@ class GithubEventHandler:
         owner, repo = repo_full_name.split("/", 1)
 
         ctx = await fetch_pr_context(installation_id, owner, repo, pr_number)
-        report = await run_review_in_sandbox(ctx, MeowConfig())
+        config = parse_meow_yml(ctx.meow_yml_raw)
+        report = await run_review_in_sandbox(ctx, config)
         comment_url = await post_pr_comment(installation_id, repo_full_name, pr_number, report)
 
         logger.info(

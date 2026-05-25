@@ -1,11 +1,10 @@
-"""Pydantic types shared by worker activities (S9 stubs).
+"""Pydantic types shared by worker activities.
 
-These three models are introduced together so that S9, S10 and the future
-S8/S13 stories can be implemented against a stable contract. The fields
-are intentionally minimal — S8 will expand ``PrContext`` with the real PR
-diff plumbing and S13 will expand ``MeowConfig`` with the full ``.meow.yml``
-schema. ``ReviewReport`` is the final S9 contract and consumed as-is by
-S10's ``post_pr_comment``.
+``ReviewReport`` is the S9 contract consumed as-is by S10's
+``post_pr_comment``. ``PrContext`` is produced by ``fetch_pr_context`` and
+threaded through the rest of the review chain. ``MeowConfig`` mirrors the
+``.meow.yml`` schema (SPEC §10) — see ``meow.common.meow_yml.parse_meow_yml``
+for the loader that produces an instance from raw YAML text.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ class PrContext(BaseModel):
     ``run_review_in_sandbox`` (S9/S12) and ``post_pr_comment`` (S10).
     """
 
+    installation_id: int = Field(ge=1)
     repo_full_name: str = Field(min_length=1)
     pr_number: int = Field(ge=1)
     base_sha: str = Field(min_length=1)
@@ -31,14 +31,24 @@ class PrContext(BaseModel):
 
 
 class MeowConfig(BaseModel):
-    """Minimal stub — extended in S13.
+    """Parsed ``.meow.yml`` — repo-level configuration for the bot (SPEC §10).
 
-    S13 adds ``model``, ``language``, ``agents_md_path``, ``exclude_paths``
-    and the parser that loads them from ``.meow.yml``.
+    All fields have spec-defined defaults so an unconfigured repo gets a
+    sensible review. ``model`` and ``language`` drive the vibe call;
+    ``max_turns`` / ``max_price_usd`` are the budget guardrails enforced by
+    ``run_review_in_sandbox`` (SPEC §14); ``agents_md_path`` points at the
+    repo-level convention doc the bot injects into vibe's context;
+    ``exclude_paths`` is a list of gitignore-style globs whose diff hunks
+    are stripped before being shown to vibe (saves turns on vendored /
+    generated code).
     """
 
+    model: str = Field(default="mistral-medium-3.5", min_length=1)
     max_turns: int = Field(default=15, ge=1)
     max_price_usd: float = Field(default=0.50, gt=0)
+    language: str = Field(default="auto", min_length=1)
+    agents_md_path: str = Field(default="AGENTS.md", min_length=1)
+    exclude_paths: list[str] = Field(default_factory=list)
 
 
 class ReviewReport(BaseModel):

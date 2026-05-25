@@ -1,8 +1,9 @@
-"""Stub for the review activity (story S9).
+"""Activity ``run_review_in_sandbox`` — real Daytona + vibe pipeline (S12).
 
-This is the signature the rest of phase C (S8, S10) targets. The real
-Daytona + ``mistral-vibe`` integration lands in S11/S12 and will replace
-the body of this function — the signature and return type are frozen.
+Mints a down-scoped ``contents:read`` installation token, filters the PR
+diff by ``exclude_paths``, then delegates the sandbox lifecycle and the
+``mistral-vibe`` call to :func:`meow.worker.sandbox.vibe.run_vibe_review`.
+The (ctx, MeowConfig) → ReviewReport contract frozen in S9 is preserved.
 """
 
 from __future__ import annotations
@@ -11,34 +12,42 @@ from datetime import timedelta
 
 import mistralai.workflows as workflows
 
+from meow.common.github.auth import mint_installation_token
 from meow.common.logging import get_logger
+from meow.worker.sandbox.diff_filter import filter_diff_by_exclude
+from meow.worker.sandbox.vibe import run_vibe_review
 from meow.worker.types import MeowConfig, PrContext, ReviewReport
 
 logger = get_logger("worker")
 
-# The header marks the stubbed output so reviewers on test PRs can tell at
-# a glance the bot hasn't actually read the diff yet. Replaced wholesale
-# by S12 with the real vibe report.
-_STUB_BODY = (
-    "> [meow-bot stub] Review pipeline ran end-to-end, but Daytona+vibe "
-    "are not yet integrated (S12)."
-)
 
-
-# The 10-minute budget is sized for the real sandbox (S12) so we don't
-# have to re-touch the decorator when the body is filled in.
+# 10 minutes is the spec-defined upper bound for a review (SPEC §8.4) — vibe
+# self-limits via max_turns/max_price, but the workflow needs a hard ceiling.
 @workflows.activity(start_to_close_timeout=timedelta(minutes=10))
 async def run_review_in_sandbox(
     ctx: PrContext,
     meow_config: MeowConfig,
 ) -> ReviewReport:
+    token = await mint_installation_token(ctx.installation_id, permissions={"contents": "read"})
+    filtered_diff = filter_diff_by_exclude(ctx.diff, meow_config.exclude_paths)
+
+    try:
+        report = await run_vibe_review(ctx, meow_config, token, filtered_diff)
+    except Exception:
+        logger.exception(
+            "activity.run_review_in_sandbox.failed",
+            extra={"repo": ctx.repo_full_name, "pr": ctx.pr_number},
+        )
+        raise
+
     logger.info(
-        "activity.run_review_in_sandbox.stub",
+        "activity.run_review_in_sandbox.done",
         extra={
             "repo": ctx.repo_full_name,
             "pr": ctx.pr_number,
-            "max_turns": meow_config.max_turns,
-            "max_price_usd": meow_config.max_price_usd,
+            "diff_bytes": len(ctx.diff),
+            "filtered_diff_bytes": len(filtered_diff),
+            "terminated_early": report.terminated_early,
         },
     )
-    return ReviewReport(body=_STUB_BODY)
+    return report
