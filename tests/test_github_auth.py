@@ -124,9 +124,7 @@ async def test_mint_installation_token_returns_token_string(
 
     monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_async)
 
-    token = await mint_installation_token(
-        42, permissions={"contents": "read"}
-    )
+    token = await mint_installation_token(42, permissions={"contents": "read"})
 
     assert token == "ghs_x"
     assert captured["method"] == "POST"

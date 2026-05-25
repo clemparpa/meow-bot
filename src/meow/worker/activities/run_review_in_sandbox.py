@@ -28,9 +28,7 @@ async def run_review_in_sandbox(
     ctx: PrContext,
     meow_config: MeowConfig,
 ) -> ReviewReport:
-    token = await mint_installation_token(
-        ctx.installation_id, permissions={"contents": "read"}
-    )
+    token = await mint_installation_token(ctx.installation_id, permissions={"contents": "read"})
     filtered_diff = filter_diff_by_exclude(ctx.diff, meow_config.exclude_paths)
 
     try:

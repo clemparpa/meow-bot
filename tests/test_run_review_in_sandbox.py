@@ -199,28 +199,46 @@ def test_pr_context_rejects_invalid() -> None:
     sha = "a" * 40
     with pytest.raises(ValidationError):
         PrContext(
-            installation_id=1, repo_full_name="", pr_number=1,
-            base_sha=sha, head_sha=sha, diff="",
+            installation_id=1,
+            repo_full_name="",
+            pr_number=1,
+            base_sha=sha,
+            head_sha=sha,
+            diff="",
         )
     with pytest.raises(ValidationError):
         PrContext(
-            installation_id=1, repo_full_name="r", pr_number=0,
-            base_sha=sha, head_sha=sha, diff="",
+            installation_id=1,
+            repo_full_name="r",
+            pr_number=0,
+            base_sha=sha,
+            head_sha=sha,
+            diff="",
         )
     with pytest.raises(ValidationError):
         PrContext(
-            installation_id=1, repo_full_name="r", pr_number=1,
-            base_sha="", head_sha=sha, diff="",
+            installation_id=1,
+            repo_full_name="r",
+            pr_number=1,
+            base_sha="",
+            head_sha=sha,
+            diff="",
         )
     with pytest.raises(ValidationError):
         PrContext(
-            installation_id=1, repo_full_name="r", pr_number=1,
-            base_sha=sha, head_sha="", diff="",
+            installation_id=1,
+            repo_full_name="r",
+            pr_number=1,
+            base_sha=sha,
+            head_sha="",
+            diff="",
         )
     with pytest.raises(ValidationError):
         PrContext(
-            installation_id=0, repo_full_name="r", pr_number=1,
-            base_sha=sha, head_sha=sha, diff="",
+            installation_id=0,
+            repo_full_name="r",
+            pr_number=1,
+            base_sha=sha,
+            head_sha=sha,
+            diff="",
         )
-
-
