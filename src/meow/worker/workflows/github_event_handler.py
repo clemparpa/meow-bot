@@ -3,17 +3,15 @@
 Receives a small, flat payload from the receiver and dispatches to the
 right activity chain based on the intent detected in the comment body.
 
-v0.1.0 phase C: only ``MENTION_REVIEW`` is recognised. The activity chain
-(``fetch_pr_context`` → ``run_review_in_sandbox`` → ``post_pr_comment``)
-lands in S8/S9/S10; until then the workflow just logs the match.
+v0.1.0 phase C: only ``MENTION_REVIEW`` is recognised, which fans out to
+the chain ``fetch_pr_context`` → ``run_review_in_sandbox`` → ``post_pr_comment``.
 
 Sandbox-clean by construction: this module imports nothing that the
 Temporal determinism sandbox forbids. ``githubkit`` parsing happens in
-the receiver (which is not a workflow); the workflow only sees primitive
-``str``/``bool`` fields it needs to decide the route. The full webhook
-``payload`` is still forwarded as a ``dict`` for downstream activities
-(S8+) — activities run outside the sandbox and may re-parse it via
-``githubkit.webhooks.parse_obj`` freely.
+the receiver (which is not a workflow) and in activities (which run
+outside the sandbox); the workflow itself only reads primitive
+``str``/``bool`` fields plus the raw ``payload`` dict — the latter is
+parsed via ``_extract_pr_coords`` (pure dict access, no I/O).
 """
 
 from __future__ import annotations
@@ -25,8 +23,35 @@ from pydantic import BaseModel
 
 from meow.common.logging import get_logger
 from meow.worker.intent import detect_intent
+from meow.worker.types import MeowConfig
+
+# The three activities transitively import githubkit → httpx → urllib.request,
+# which the Temporal sandbox refuses to validate at workflow registration time.
+# ``imports_passed_through`` tells the sandbox these modules are only used
+# from activities (which run outside the sandbox) — the workflow itself
+# never executes their code, it just dispatches.
+with workflows.workflow.unsafe.imports_passed_through():
+    from meow.worker.activities.fetch_pr_context import fetch_pr_context
+    from meow.worker.activities.post_pr_comment import post_pr_comment
+    from meow.worker.activities.run_review_in_sandbox import run_review_in_sandbox
 
 logger = get_logger("worker")
+
+
+def _extract_pr_coords(payload: dict[str, Any]) -> tuple[int, str, int]:
+    """Pull installation_id, repo_full_name, pr_number from a webhook payload.
+
+    All three keys are guaranteed for ``issue_comment`` events from a GitHub
+    App installation — the receiver already filters non-PR comments via
+    ``is_pr``, and GitHub Apps always include ``installation`` and
+    ``repository`` blocks. A ``KeyError`` here is a contract violation worth
+    failing loudly on, not silencing.
+    """
+    return (
+        int(payload["installation"]["id"]),
+        str(payload["repository"]["full_name"]),
+        int(payload["issue"]["number"]),
+    )
 
 
 class GithubEventInput(BaseModel):
@@ -86,5 +111,20 @@ class GithubEventHandler:
             "workflow.intent.detected",
             extra={"intent": intent.value, "delivery": input.delivery},
         )
-        # TODO(S8/S9/S10): fetch_pr_context → run_review_in_sandbox → post_pr_comment
+
+        installation_id, repo_full_name, pr_number = _extract_pr_coords(input.payload)
+        owner, repo = repo_full_name.split("/", 1)
+
+        ctx = await fetch_pr_context(installation_id, owner, repo, pr_number)
+        report = await run_review_in_sandbox(ctx, MeowConfig())
+        comment_url = await post_pr_comment(installation_id, repo_full_name, pr_number, report)
+
+        logger.info(
+            "workflow.review_posted",
+            extra={
+                "delivery": input.delivery,
+                "comment_url": comment_url,
+                "terminated_early": report.terminated_early,
+            },
+        )
         return None
