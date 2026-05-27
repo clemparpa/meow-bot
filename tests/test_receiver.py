@@ -5,16 +5,16 @@ from __future__ import annotations
 import hashlib
 import hmac
 import importlib
-import io
 import json
 import logging
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from meow.common.logging import _HANDLER_SENTINEL, JsonFormatter
+from meow.common.logging import get_logger
 from tests.fixtures.webhooks import issue_comment_body
 
 WEBHOOK_SECRET = "s3cr3t-webhook-key"
@@ -39,7 +39,7 @@ def _receiver_env(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setenv("GITHUB_APP_ID", "1")
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.setenv("MISTRAL_API_KEY", "mistral-test")
-    monkeypatch.setenv("DAYTONA_API_KEY", "daytona-test")
+    monkeypatch.setenv("KOYEB_API_TOKEN", "koyeb-test")
     monkeypatch.setenv("DEPLOYMENT_NAME", "meow-bot-test")
     # Set the bot login here (not inside individual tests) so that the
     # module-level ``Settings()`` in receiver.app — instantiated when the
@@ -47,37 +47,22 @@ def _receiver_env(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.setenv("MEOW_BOT_LOGIN", BOT_LOGIN)
 
 
-@pytest.fixture
-def log_buffer() -> Iterator[io.StringIO]:
-    """Replace the receiver logger's handler with an in-memory buffer.
-
-    Pytest's ``capsys``/``capfd`` race with the module-level handler that
-    binds to ``sys.stdout`` at import time, so we control the sink directly
-    instead.
-    """
-    buf = io.StringIO()
-    logger = logging.getLogger("meow.receiver")
-    original_handlers = logger.handlers[:]
-    original_propagate = logger.propagate
-    logger.handlers.clear()
-    handler = logging.StreamHandler(buf)
-    handler.setFormatter(JsonFormatter("receiver"))
-    setattr(handler, _HANDLER_SENTINEL, True)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    try:
-        yield buf
-    finally:
-        logger.handlers = original_handlers
-        logger.propagate = original_propagate
+@pytest.fixture(autouse=True)
+def _capture_receiver_logs(caplog: pytest.LogCaptureFixture):
+    # ``get_logger`` sets ``propagate=False``, so caplog's root handler never
+    # sees these records — attach its handler directly to the meow logger.
+    logger = get_logger("receiver")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="meow.receiver")
+    yield
+    logger.removeHandler(caplog.handler)
 
 
 EXECUTION_ID = "exec-fake-123"
 
 
 @pytest.fixture
-async def client(log_buffer: io.StringIO) -> AsyncIterator[AsyncClient]:
+async def client() -> AsyncIterator[AsyncClient]:
     from meow.receiver import app as app_module
 
     importlib.reload(app_module)
@@ -163,7 +148,9 @@ async def test_webhook_self_event_skipped(client: AsyncClient) -> None:
     assert response.json() == {"skipped": "self"}
 
 
-async def test_webhook_logs_accepted_event(log_buffer: io.StringIO, client: AsyncClient) -> None:
+async def test_webhook_logs_accepted_event(
+    caplog: pytest.LogCaptureFixture, client: AsyncClient
+) -> None:
     body = issue_comment_body(sender_login="alice")
     response = await client.post(
         "/gh/webhook",
@@ -176,18 +163,12 @@ async def test_webhook_logs_accepted_event(log_buffer: io.StringIO, client: Asyn
     )
     assert response.status_code == 200
 
-    accepted_lines = [
-        json.loads(line)
-        for line in log_buffer.getvalue().splitlines()
-        if '"event": "webhook.accepted"' in line
-    ]
-    assert accepted_lines, f"no webhook.accepted log line: {log_buffer.getvalue()!r}"
-    record = accepted_lines[-1]
-    assert record["svc"] == "receiver"
-    assert record["level"] == "info"
-    assert record["gh_event"] == "issue_comment"
-    assert record["delivery"] == "abc-123"
-    assert record["execution_id"] == EXECUTION_ID
+    accepted = [r for r in caplog.records if r.message == "webhook.accepted"]
+    assert accepted, f"no webhook.accepted log line: {[r.message for r in caplog.records]!r}"
+    record: Any = accepted[-1]
+    assert record.gh_event == "issue_comment"
+    assert record.delivery == "abc-123"
+    assert record.execution_id == EXECUTION_ID
 
 
 async def test_webhook_malformed_payload_returns_400(client: AsyncClient) -> None:

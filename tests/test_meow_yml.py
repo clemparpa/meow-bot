@@ -7,40 +7,25 @@ produce non-default ``MeowConfig`` values.
 
 from __future__ import annotations
 
-import io
-import json
 import logging
-from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
-from meow.common.logging import _HANDLER_SENTINEL, JsonFormatter
+from meow.common.logging import get_logger
 from meow.common.meow_yml import parse_meow_yml
 from meow.worker.types import MeowConfig
 
 
-@pytest.fixture
-def log_buffer() -> Iterator[io.StringIO]:
-    buf = io.StringIO()
-    logger = logging.getLogger("meow.common")
-    original_handlers = logger.handlers[:]
-    original_propagate = logger.propagate
-    logger.handlers.clear()
-    handler = logging.StreamHandler(buf)
-    handler.setFormatter(JsonFormatter("common"))
-    setattr(handler, _HANDLER_SENTINEL, True)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    try:
-        yield buf
-    finally:
-        logger.handlers = original_handlers
-        logger.propagate = original_propagate
-
-
-def _events(buf: io.StringIO) -> list[dict]:
-    return [json.loads(line) for line in buf.getvalue().splitlines() if line]
+@pytest.fixture(autouse=True)
+def _capture_common_logs(caplog: pytest.LogCaptureFixture):
+    # ``get_logger`` sets ``propagate=False``, so caplog's root handler never
+    # sees these records — attach its handler directly to the meow logger.
+    logger = get_logger("common")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger="meow.common")
+    yield
+    logger.removeHandler(caplog.handler)
 
 
 def test_parse_none_returns_defaults() -> None:
@@ -55,20 +40,21 @@ def test_parse_whitespace_only_returns_defaults() -> None:
     assert parse_meow_yml("   \n\t\n  ") == MeowConfig()
 
 
-def test_parse_malformed_yaml_warns_and_returns_defaults(log_buffer: io.StringIO) -> None:
+def test_parse_malformed_yaml_warns_and_returns_defaults(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     # Unclosed bracket — yaml.safe_load raises yaml.YAMLError.
     assert parse_meow_yml("model: [unclosed") == MeowConfig()
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["config.meow_yml.parse_failed"]
-    assert "error" in events[0]
+    assert [r.message for r in caplog.records] == ["config.meow_yml.parse_failed"]
+    assert hasattr(caplog.records[0], "error")
 
 
-def test_parse_non_mapping_root_returns_defaults(log_buffer: io.StringIO) -> None:
+def test_parse_non_mapping_root_returns_defaults(caplog: pytest.LogCaptureFixture) -> None:
     # A YAML list is valid YAML but not a config mapping.
     assert parse_meow_yml("- one\n- two\n") == MeowConfig()
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["config.meow_yml.not_a_mapping"]
-    assert events[0]["root_type"] == "list"
+    assert [r.message for r in caplog.records] == ["config.meow_yml.not_a_mapping"]
+    record: Any = caplog.records[0]
+    assert record.root_type == "list"
 
 
 def test_parse_full_valid_yaml() -> None:
@@ -103,22 +89,21 @@ def test_parse_partial_overrides_only_named_keys() -> None:
     assert cfg.exclude_paths == defaults.exclude_paths
 
 
-def test_parse_wrong_type_falls_back_to_defaults(log_buffer: io.StringIO) -> None:
+def test_parse_wrong_type_falls_back_to_defaults(caplog: pytest.LogCaptureFixture) -> None:
     # max_turns expects an int, gets a string — pydantic ValidationError.
     cfg = parse_meow_yml("max_turns: lots\n")
     assert cfg == MeowConfig()
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["config.meow_yml.invalid"]
-    assert isinstance(events[0]["errors"], list)
-    assert events[0]["errors"]
+    assert [r.message for r in caplog.records] == ["config.meow_yml.invalid"]
+    record: Any = caplog.records[0]
+    assert isinstance(record.errors, list)
+    assert record.errors
 
 
-def test_parse_constraint_violation_falls_back(log_buffer: io.StringIO) -> None:
+def test_parse_constraint_violation_falls_back(caplog: pytest.LogCaptureFixture) -> None:
     # max_price_usd has gt=0 constraint — 0 must be rejected.
     cfg = parse_meow_yml("max_price_usd: 0\n")
     assert cfg == MeowConfig()
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["config.meow_yml.invalid"]
+    assert [r.message for r in caplog.records] == ["config.meow_yml.invalid"]
 
 
 def test_parse_unknown_keys_are_accepted_and_ignored() -> None:

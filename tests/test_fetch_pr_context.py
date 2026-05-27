@@ -8,10 +8,8 @@ without spinning up httpx mocks or a real installation token.
 
 from __future__ import annotations
 
-import io
-import json
 import logging
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -19,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from githubkit.exception import RequestFailed
 
-from meow.common.logging import _HANDLER_SENTINEL, JsonFormatter
+from meow.common.logging import get_logger
 from meow.worker.activities import fetch_pr_context as activity_module
 from meow.worker.activities.fetch_pr_context import fetch_pr_context
 from meow.worker.types import PrContext
@@ -95,28 +93,15 @@ def patch_installation_client(
     return gh
 
 
-@pytest.fixture
-def log_buffer() -> Iterator[io.StringIO]:
-    buf = io.StringIO()
-    logger = logging.getLogger("meow.worker")
-    original_handlers = logger.handlers[:]
-    original_propagate = logger.propagate
-    logger.handlers.clear()
-    handler = logging.StreamHandler(buf)
-    handler.setFormatter(JsonFormatter("worker"))
-    setattr(handler, _HANDLER_SENTINEL, True)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    try:
-        yield buf
-    finally:
-        logger.handlers = original_handlers
-        logger.propagate = original_propagate
-
-
-def _events(buf: io.StringIO) -> list[dict]:
-    return [json.loads(line) for line in buf.getvalue().splitlines() if line]
+@pytest.fixture(autouse=True)
+def _capture_worker_logs(caplog: pytest.LogCaptureFixture):
+    # ``get_logger`` sets ``propagate=False``, so caplog's root handler never
+    # sees these records — attach its handler directly to the meow logger.
+    logger = get_logger("worker")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="meow.worker")
+    yield
+    logger.removeHandler(caplog.handler)
 
 
 async def test_returns_full_pr_context(patch_installation_client: MagicMock) -> None:
@@ -175,17 +160,17 @@ async def test_requests_contents_read_permission(
 
 async def test_logs_summary(
     patch_installation_client: MagicMock,
-    log_buffer: io.StringIO,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     await fetch_pr_context(42, "octocat", "hello", 7)
 
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["activity.fetch_pr_context.done"]
-    record = events[0]
-    assert record["repo"] == "octocat/hello"
-    assert record["pr"] == 7
-    assert record["diff_bytes"] == len(_DIFF)
-    assert record["has_meow_yml"] is True
+    done = [r for r in caplog.records if r.message == "activity.fetch_pr_context.done"]
+    assert len(done) == 1
+    record: Any = done[0]
+    assert record.repo == "octocat/hello"
+    assert record.pr == 7
+    assert record.diff_bytes == len(_DIFF)
+    assert record.has_meow_yml is True
 
 
 async def test_empty_diff_is_ok(monkeypatch: pytest.MonkeyPatch) -> None:

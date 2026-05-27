@@ -13,16 +13,13 @@ underlying coroutine, so ``AsyncMock`` substitutes cleanly.
 
 from __future__ import annotations
 
-import io
-import json
 import logging
-from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
-from meow.common.logging import _HANDLER_SENTINEL, JsonFormatter
+from meow.common.logging import get_logger
 from meow.worker.types import MeowConfig, PrContext, ReviewReport
 from meow.worker.workflows import github_event_handler as workflow_module
 from meow.worker.workflows.github_event_handler import (
@@ -64,28 +61,15 @@ def _pr_payload(
     }
 
 
-@pytest.fixture
-def log_buffer() -> Iterator[io.StringIO]:
-    buf = io.StringIO()
-    logger = logging.getLogger("meow.worker")
-    original_handlers = logger.handlers[:]
-    original_propagate = logger.propagate
-    logger.handlers.clear()
-    handler = logging.StreamHandler(buf)
-    handler.setFormatter(JsonFormatter("worker"))
-    setattr(handler, _HANDLER_SENTINEL, True)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    try:
-        yield buf
-    finally:
-        logger.handlers = original_handlers
-        logger.propagate = original_propagate
-
-
-def _events(buf: io.StringIO) -> list[dict]:
-    return [json.loads(line) for line in buf.getvalue().splitlines() if line]
+@pytest.fixture(autouse=True)
+def _capture_worker_logs(caplog: pytest.LogCaptureFixture):
+    # ``get_logger`` sets ``propagate=False``, so caplog's root handler never
+    # sees these records — attach its handler directly to the meow logger.
+    logger = get_logger("worker")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="meow.worker")
+    yield
+    logger.removeHandler(caplog.handler)
 
 
 async def _run(handler: GithubEventHandler, input: GithubEventInput) -> None:
@@ -96,39 +80,41 @@ async def _run(handler: GithubEventHandler, input: GithubEventInput) -> None:
     await handler.run(input)
 
 
-async def test_run_skips_unexpected_event(log_buffer: io.StringIO) -> None:
+async def test_run_skips_unexpected_event(caplog: pytest.LogCaptureFixture) -> None:
     handler = GithubEventHandler()
     await _run(handler, _make_input(event="push", delivery="del-1"))
 
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["workflow.github_event.unexpected_event"]
-    assert events[0]["gh_event"] == "push"
-    assert events[0]["delivery"] == "del-1"
+    assert [r.message for r in caplog.records] == ["workflow.github_event.unexpected_event"]
+    record: Any = caplog.records[0]
+    assert record.gh_event == "push"
+    assert record.delivery == "del-1"
 
 
-async def test_run_warns_when_no_bot_login(log_buffer: io.StringIO) -> None:
+async def test_run_warns_when_no_bot_login(caplog: pytest.LogCaptureFixture) -> None:
     handler = GithubEventHandler()
     await _run(
         handler,
         _make_input(delivery="del-3", bot_login=None, comment_body="@meow-bot review"),
     )
 
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["workflow.github_event.no_bot_login"]
-    assert events[0]["delivery"] == "del-3"
+    assert [r.message for r in caplog.records] == ["workflow.github_event.no_bot_login"]
+    record: Any = caplog.records[0]
+    assert record.delivery == "del-3"
 
 
-async def test_run_logs_no_intent_when_body_doesnt_match(log_buffer: io.StringIO) -> None:
+async def test_run_logs_no_intent_when_body_doesnt_match(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     handler = GithubEventHandler()
     await _run(handler, _make_input(delivery="del-4", comment_body="just a normal comment"))
 
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["workflow.github_event.no_intent"]
-    assert events[0]["delivery"] == "del-4"
+    assert [r.message for r in caplog.records] == ["workflow.github_event.no_intent"]
+    record: Any = caplog.records[0]
+    assert record.delivery == "del-4"
 
 
 async def test_run_logs_no_intent_when_comment_is_on_plain_issue(
-    log_buffer: io.StringIO,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     handler = GithubEventHandler()
     # Same matching body, but is_pr=False — detect_intent returns None.
@@ -137,8 +123,7 @@ async def test_run_logs_no_intent_when_comment_is_on_plain_issue(
         _make_input(delivery="del-6", comment_body="@meow-bot review", is_pr=False),
     )
 
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["workflow.github_event.no_intent"]
+    assert [r.message for r in caplog.records] == ["workflow.github_event.no_intent"]
 
 
 # --- S10.5: review chain wiring -------------------------------------------
@@ -275,7 +260,7 @@ async def test_run_review_chain_parses_meow_yml_from_context(
 
 async def test_run_review_chain_logs_review_posted(
     patch_activities: dict[str, AsyncMock],
-    log_buffer: io.StringIO,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     handler = GithubEventHandler()
     await _run(
@@ -287,16 +272,16 @@ async def test_run_review_chain_logs_review_posted(
         ),
     )
 
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == [
+    assert [r.message for r in caplog.records] == [
         "workflow.intent.detected",
         "workflow.review_posted",
     ]
-    assert events[0]["intent"] == "mention_review"
-    posted = events[1]
-    assert posted["delivery"] == "del-chain-4"
-    assert posted["comment_url"] == _STUB_COMMENT_URL
-    assert posted["terminated_early"] is False
+    detected: Any = caplog.records[0]
+    posted: Any = caplog.records[1]
+    assert detected.intent == "mention_review"
+    assert posted.delivery == "del-chain-4"
+    assert posted.comment_url == _STUB_COMMENT_URL
+    assert posted.terminated_early is False
 
 
 async def test_run_review_chain_raises_on_malformed_payload(

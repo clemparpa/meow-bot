@@ -8,17 +8,15 @@ activity's composition logic and the body we send to GitHub.
 
 from __future__ import annotations
 
-import io
-import json
 import logging
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from meow.common.logging import _HANDLER_SENTINEL, JsonFormatter
+from meow.common.logging import get_logger
 from meow.worker.activities import post_pr_comment as activity_module
 from meow.worker.activities.post_pr_comment import (
     _HEADER,
@@ -65,28 +63,15 @@ def patch_installation_client(
     return gh
 
 
-@pytest.fixture
-def log_buffer() -> Iterator[io.StringIO]:
-    buf = io.StringIO()
-    logger = logging.getLogger("meow.worker")
-    original_handlers = logger.handlers[:]
-    original_propagate = logger.propagate
-    logger.handlers.clear()
-    handler = logging.StreamHandler(buf)
-    handler.setFormatter(JsonFormatter("worker"))
-    setattr(handler, _HANDLER_SENTINEL, True)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    try:
-        yield buf
-    finally:
-        logger.handlers = original_handlers
-        logger.propagate = original_propagate
-
-
-def _events(buf: io.StringIO) -> list[dict]:
-    return [json.loads(line) for line in buf.getvalue().splitlines() if line]
+@pytest.fixture(autouse=True)
+def _capture_worker_logs(caplog: pytest.LogCaptureFixture):
+    # ``get_logger`` sets ``propagate=False``, so caplog's root handler never
+    # sees these records — attach its handler directly to the meow logger.
+    logger = get_logger("worker")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="meow.worker")
+    yield
+    logger.removeHandler(caplog.handler)
 
 
 async def test_returns_html_url(patch_installation_client: MagicMock) -> None:
@@ -151,18 +136,17 @@ async def test_invalid_repo_full_name_raises(
 
 async def test_logs_summary(
     patch_installation_client: MagicMock,
-    log_buffer: io.StringIO,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     await post_pr_comment(42, "octocat/hello", 7, ReviewReport(body="hello world"))
 
-    events = _events(log_buffer)
-    assert [e["event"] for e in events] == ["activity.post_pr_comment.done"]
-    record = events[0]
-    assert record["repo"] == "octocat/hello"
-    assert record["pr"] == 7
-    assert record["comment_id"] == _COMMENT_ID
+    assert [r.message for r in caplog.records] == ["activity.post_pr_comment.done"]
+    record: Any = caplog.records[0]
+    assert record.repo == "octocat/hello"
+    assert record.pr == 7
+    assert record.comment_id == _COMMENT_ID
     # Body is header + separator + report — bigger than just the report.
-    assert record["body_bytes"] > len("hello world")
+    assert record.body_bytes > len("hello world")
 
 
 def test_scrub_secrets_is_passthrough_in_v0_1_0() -> None:

@@ -1,24 +1,21 @@
 """Unit tests for ``run_review_in_sandbox`` (story S12).
 
 The activity composes three side-effecting pieces — minting a GitHub
-token, filtering the diff, and running vibe in a Daytona sandbox — all
+token, filtering the diff, and running vibe in a Koyeb sandbox — all
 of which are mocked at their import site in the activity module. We're
 testing composition, not the SDKs themselves.
 """
 
 from __future__ import annotations
 
-import io
-import json
 import logging
-from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
 
-from meow.common.logging import _HANDLER_SENTINEL, JsonFormatter
+from meow.common.logging import get_logger
 from meow.worker.activities import run_review_in_sandbox as activity_module
 from meow.worker.activities.run_review_in_sandbox import run_review_in_sandbox
 from meow.worker.types import MeowConfig, PrContext, ReviewReport
@@ -52,28 +49,15 @@ def _ctx(*, repo: str = "octocat/hello", pr: int = 42, diff: str = _DIFF) -> PrC
     )
 
 
-@pytest.fixture
-def log_buffer() -> Iterator[io.StringIO]:
-    buf = io.StringIO()
-    logger = logging.getLogger("meow.worker")
-    original_handlers = logger.handlers[:]
-    original_propagate = logger.propagate
-    logger.handlers.clear()
-    handler = logging.StreamHandler(buf)
-    handler.setFormatter(JsonFormatter("worker"))
-    setattr(handler, _HANDLER_SENTINEL, True)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    try:
-        yield buf
-    finally:
-        logger.handlers = original_handlers
-        logger.propagate = original_propagate
-
-
-def _events(buf: io.StringIO) -> list[dict]:
-    return [json.loads(line) for line in buf.getvalue().splitlines() if line]
+@pytest.fixture(autouse=True)
+def _capture_worker_logs(caplog: pytest.LogCaptureFixture):
+    # ``get_logger`` sets ``propagate=False``, so caplog's root handler never
+    # sees these records — attach its handler directly to the meow logger.
+    logger = get_logger("worker")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.INFO, logger="meow.worker")
+    yield
+    logger.removeHandler(caplog.handler)
 
 
 @pytest.fixture
@@ -159,7 +143,7 @@ async def test_terminated_early_propagates(
 
 async def test_vibe_failure_is_logged_and_reraised(
     patch_seams: dict[str, Any],
-    log_buffer: io.StringIO,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     boom = RuntimeError("sandbox boom")
     patch_seams["review_mock"].side_effect = boom
@@ -167,24 +151,24 @@ async def test_vibe_failure_is_logged_and_reraised(
     with pytest.raises(RuntimeError, match="sandbox boom"):
         await run_review_in_sandbox(_ctx(), MeowConfig())
 
-    events = _events(log_buffer)
-    assert any(e["event"] == "activity.run_review_in_sandbox.failed" for e in events)
+    assert any(r.message == "activity.run_review_in_sandbox.failed" for r in caplog.records)
 
 
 async def test_done_log_records_diff_sizes_and_terminated_flag(
     patch_seams: dict[str, Any],
-    log_buffer: io.StringIO,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     cfg = MeowConfig(exclude_paths=["vendor/**"])
     await run_review_in_sandbox(_ctx(), cfg)
 
-    events = _events(log_buffer)
-    done = next(e for e in events if e["event"] == "activity.run_review_in_sandbox.done")
-    assert done["repo"] == "octocat/hello"
-    assert done["pr"] == 42
-    assert done["diff_bytes"] == len(_DIFF)
-    assert done["filtered_diff_bytes"] < done["diff_bytes"]
-    assert done["terminated_early"] is False
+    done: Any = next(
+        r for r in caplog.records if r.message == "activity.run_review_in_sandbox.done"
+    )
+    assert done.repo == "octocat/hello"
+    assert done.pr == 42
+    assert done.diff_bytes == len(_DIFF)
+    assert done.filtered_diff_bytes < done.diff_bytes
+    assert done.terminated_early is False
 
 
 # --- Pydantic contract guards kept from S9 -------------------------------
