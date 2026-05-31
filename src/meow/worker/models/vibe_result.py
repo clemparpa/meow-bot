@@ -7,6 +7,8 @@ banners) lives action-side; this model stays format-agnostic.
 
 from __future__ import annotations
 
+from typing import Self
+
 from pydantic import BaseModel, ConfigDict
 
 __all__ = ["VibeResult"]
@@ -27,3 +29,22 @@ class VibeResult(BaseModel):
     # ``<vibe_stop_event>`` payload on budget caps and the exception
     # trace on crashes — the runner does not split the two.
     stop_reason: str | None
+
+    @classmethod
+    def from_exec(cls, *, exit_code: int, stdout: str, stderr: str) -> Self:
+        """Build a result from one ``sandbox.exec()`` outcome.
+
+        Non-zero exit ⇒ ``terminated_early``: planned cap (turn/price)
+        and hard crash both end the run before stdout is meaningful.
+        ``stderr`` is forwarded verbatim as ``stop_reason`` — it carries
+        either the ``<vibe_stop_event>`` payload on a cap or the
+        exception trace on a crash; we don't try to split the two.
+        """
+        if exit_code == 0:
+            body = stdout.strip()
+            return cls(body=body, terminated_early=False, stop_reason=None)
+        return cls(
+            body=None,
+            terminated_early=True,
+            stop_reason=stderr.strip() or None,
+        )

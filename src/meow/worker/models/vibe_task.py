@@ -7,6 +7,7 @@ activity. Frozen so it hashes cleanly for workflow checkpointing.
 
 from __future__ import annotations
 
+import shlex
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -49,3 +50,21 @@ class VibeTask(BaseModel):
             max_turns=cfg.max_turns,
             max_price_usd=cfg.max_price_usd,
         )
+
+    def build_command(self) -> str:
+        """Render the shell-safe ``vibe ...`` command line for this task.
+
+        All user-controlled bits go through ``shlex.quote`` so quotes,
+        newlines, or backticks in the prompt can't break out of the
+        command. Consumed by the ``run_vibe`` activity via
+        ``sandbox.exec(task.build_command(), ...)``.
+        """
+        parts = [
+            "vibe",
+            "--prompt", shlex.quote(self.prompt),
+            "--max-turns", str(self.max_turns),
+            "--max-price", str(self.max_price_usd),
+        ]
+        if self.agent is not None:
+            parts += ["--agent", shlex.quote(self.agent)]
+        return " ".join(parts)
