@@ -59,6 +59,13 @@ RUN uv python install "${PYTHON_VERSION}" \
 # `uv tool install` puts the entrypoint shim in /root/.local/bin/vibe.
 RUN uv tool install "mistral-vibe==${VIBE_VERSION}"
 
+# --- Bake the harness config + skills/agents trees ----------------------
+# vibe resolves config in order: <cwd>/.vibe/config.toml then ~/.vibe/config.toml.
+# We bake the defaults at home so any sandbox-side `vibe` call works without
+# extra setup. Per-run overrides (e.g. enabled_skills) are written to
+# <cwd>/.vibe/config.toml by the worker, which takes priority.
+COPY sandbox_files/.vibe /root/.vibe
+
 # --- Node.js (pinned tarball, includes corepack) ------------------------
 RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
       -o /tmp/node.tar.xz \

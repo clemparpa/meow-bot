@@ -10,6 +10,7 @@ on:
     branches: [main]
     paths:
       - "src/meow/worker/sandbox/Dockerfile"
+      - "src/meow/worker/sandbox/sandbox_files/**"
       - ".github/workflows/sandbox-image.yml"
   workflow_dispatch:
 

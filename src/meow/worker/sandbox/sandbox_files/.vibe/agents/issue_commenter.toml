@@ -1,0 +1,15 @@
+display_name = "Issue Commenter"
+description = "Agent called to answer to issue / pr comments"
+safety = "safe"
+agent_type = "agent"
+# system_prompt_id=
+enabled_tools = [
+    "read_file",
+    "grep",
+    "todo",
+    "bash",
+    "skill",
+    "task",
+]
+
+enabled_skills = []
