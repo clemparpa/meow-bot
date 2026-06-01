@@ -244,7 +244,6 @@ class SandboxBuilder:
         self,
         *,
         pr_number: int,
-        base_ref: str,
         base_sha: str,
         head_sha: str,
         repo_full_name: str,
@@ -264,7 +263,6 @@ class SandboxBuilder:
             f"Working notes for this review session. Not part of the PR.\n\n"
             f"- repo: {repo_full_name}\n"
             f"- pr_number: {pr_number}\n"
-            f"- base_ref: {base_ref}\n"
             f"- base_sha: {base_sha}\n"
             f"- head_sha: {head_sha}\n\n"
             f"## Notes\n\n"
