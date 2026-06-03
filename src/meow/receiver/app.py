@@ -6,35 +6,47 @@ Implements the v0.1.0 receiver described in ``spec.md`` §6 and
 - ``GET /healthz`` for liveness probes.
 - ``POST /gh/webhook`` validates the HMAC-SHA256 signature, filters
   self-deliveries and unhandled events, then starts a Mistral Workflows
-  execution of ``GithubEventHandler`` (idempotent on
-  ``X-GitHub-Delivery``) before returning ``{"queued": true, ...}``.
+  execution (idempotent on ``X-GitHub-Delivery``) before returning
+  ``{"queued": true, ...}``.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
-from githubkit.utils import UNSET
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from githubkit.webhooks import parse
-from mistralai.client import Mistral
 from pydantic import ValidationError
 
 from meow.common.config import Settings
 from meow.common.github.webhook import InvalidSignature, verify_signature
 from meow.common.logging import get_logger
+from meow.receiver.client import trigger_workflow
+
+# Side-effect import: every module under controllers/ registers its
+# `@on_event`-decorated class in `_CONTROLLERS` at import time. Removing
+# this line silently disables every route.
+from meow.receiver.controllers import *  # noqa: F401,F403
+from meow.receiver.utils import _CONTROLLERS, WebhookContext
 
 settings = Settings()  # ty: ignore[missing-argument]
 logger = get_logger("receiver")
 
-# Module-level client: keeps the HTTP session warm between requests and
-# avoids re-validating the API key on every webhook. Errors from
-# `execute_workflow` (e.g. 401) surface at first webhook, not at boot.
-_workflows_client: Mistral = Mistral(api_key=settings.mistral_api_key)
-
 app = FastAPI(title="meow-receiver", version="0.1.0")
 
-_HANDLED_EVENTS: frozenset[str] = frozenset({"issue_comment"})
+
+async def verified_webhook(
+    request: Request,
+    x_hub_signature_256: str | None = Header(default=None),
+    x_github_event: str | None = Header(default=None),
+    x_github_delivery: str | None = Header(default=None),
+) -> tuple[bytes, str | None, str | None]:
+    body = await request.body()
+    try:
+        verify_signature(x_hub_signature_256, body, settings.github_webhook_secret)
+    except InvalidSignature:
+        raise HTTPException(401, "invalid signature") from None
+    return body, x_github_event, x_github_delivery
 
 
 @app.get("/healthz")
@@ -43,23 +55,16 @@ async def healthz() -> dict[str, str]:
 
 
 @app.post("/gh/webhook")
-async def gh_webhook(request: Request) -> dict[str, Any]:
-    body = await request.body()
-    signature = request.headers.get("X-Hub-Signature-256")
-
-    try:
-        verify_signature(signature, body, settings.github_webhook_secret)
-    except InvalidSignature:
-        raise HTTPException(status_code=401, detail="invalid signature") from None
-
-    event = request.headers.get("X-GitHub-Event")
-    delivery = request.headers.get("X-GitHub-Delivery")
-
+async def gh_webhook(
+    auth: tuple[bytes, str | None, str | None] = Depends(verified_webhook),
+) -> dict[str, Any]:
+    body, event, delivery = auth
     if not event:
         logger.info("webhook.skipped", extra={"reason": "no-event", "delivery": delivery})
         return {"skipped": "event"}
 
-    if event not in _HANDLED_EVENTS:
+    dispatch = _CONTROLLERS.get(event)
+    if dispatch is None:
         logger.info(
             "webhook.skipped",
             extra={"reason": "event-not-handled", "delivery": delivery, "gh_event": event},
@@ -73,46 +78,63 @@ async def gh_webhook(request: Request) -> dict[str, Any]:
             "webhook.malformed_payload",
             extra={"delivery": delivery, "gh_event": event},
         )
-        raise HTTPException(status_code=400, detail="malformed webhook payload") from None
+        raise HTTPException(400, "malformed webhook payload") from None
 
-    sender_login = parsed.sender.login if parsed.sender else None
-    if settings.bot_login and sender_login == settings.bot_login:
+    sender = getattr(parsed, "sender", {})
+    sender_login = getattr(sender, "login", None)
+    if sender_login == settings.bot_login:
         logger.info(
             "webhook.skipped",
             extra={"reason": "self", "delivery": delivery, "gh_event": event},
         )
         return {"skipped": "self"}
 
-    # Extract here what the workflow needs to decide its route — the workflow
-    # runs in the Temporal determinism sandbox and cannot import githubkit
-    # itself (lazy submodules touch os.getenv at runtime). The full payload
-    # is still forwarded for downstream activities, which run outside the
-    # sandbox and may re-parse it via githubkit freely.
-    # ty's view of `parse(event, body)` is the union of every webhook model,
-    # so the chained attributes resolve to Unknown — annotate the narrowing.
-    comment_body: str | None = parsed.comment.body  # ty: ignore[unresolved-attribute]
-    is_pr = parsed.issue.pull_request is not UNSET
+    event_dispatch = dispatch.get(type(parsed))
+    if event_dispatch is None:
+        logger.info(
+            "webhook.skipped",
+            extra={"reason": "action-not-handled", "delivery": delivery, "gh_event": event},
+        )
+        return {"skipped": "action"}
 
-    execution = _workflows_client.workflows.execute_workflow(
-        workflow_identifier="GithubEventHandler",
-        execution_id=f"{event}-{delivery}",
-        deployment_name=settings.deployment_name,
-        input={
-            "event": event,
-            "delivery": delivery,
-            "bot_login": settings.bot_login,
-            "comment_body": comment_body,
-            "is_pr": is_pr,
-            "payload": parsed.model_dump(mode="json"),
-        },
-    )
+    ctx = WebhookContext(event_name=event, delivery=delivery)
+    try:
+        input_model = event_dispatch.factory(parsed, ctx)
+    except ValueError as exc:
+        # Factory contract violation (e.g. installation UNSET) — skip with 200
+        # so GitHub doesn't retry a deterministic failure.
+        logger.info(
+            "webhook.skipped",
+            extra={
+                "reason": "input-build-failed",
+                "error": str(exc),
+                "delivery": delivery,
+                "gh_event": event,
+            },
+        )
+        return {"skipped": "input"}
+
+    for method, predicate, workflow_id in event_dispatch.handlers:
+        if predicate is not None and not predicate(input_model):
+            continue
+
+        logger.info(
+            "webhook.dispatched",
+            extra={
+                "gh_event": event,
+                "action": type(parsed).__name__,
+                "handler": workflow_id or getattr(method, "__name__", "<unknown>"),
+                "delivery": delivery,
+            },
+        )
+        if workflow_id is not None:
+            return await trigger_workflow(workflow_id, input_model, ctx)
+        # method is non-None whenever workflow_id is None — guaranteed by on_event.
+        assert method is not None
+        return await method(input_model, ctx)
 
     logger.info(
-        "webhook.accepted",
-        extra={
-            "gh_event": event,
-            "delivery": delivery,
-            "execution_id": execution.execution_id,
-        },
+        "webhook.skipped",
+        extra={"reason": "no-intent", "delivery": delivery, "gh_event": event},
     )
-    return {"queued": True, "execution_id": execution.execution_id}
+    return {"skipped": "no-intent"}
