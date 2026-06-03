@@ -1,7 +1,7 @@
 """Activity ``post_pr_comment`` (story S10).
 
-Publishes ``run_review_in_sandbox``'s report as a PR comment via githubkit.
-Auth is delegated to ``installation_client`` (S3), which mints an
+Publishes a review report as a PR comment via githubkit. Auth is
+delegated to ``github_installation_auth``, which mints an
 ``issues:write`` installation token for the call.
 
 Note on the endpoint: GitHub treats PR comments as *issue* comments
@@ -16,9 +16,9 @@ from datetime import timedelta
 
 import mistralai.workflows as workflows
 
-from meow.common.github.auth import installation_client
+from meow.common.github.auth import github_installation_auth
 from meow.common.logging import get_logger
-from meow.worker.types import ReviewReport
+from meow.worker.models import ReviewReport
 
 logger = get_logger("worker")
 
@@ -53,8 +53,8 @@ async def post_pr_comment(
     scrubbed = _scrub_secrets(report.body)
     body = f"{_HEADER}\n\n---\n\n{scrubbed}"
 
-    async with installation_client(installation_id, permissions={"issues": "write"}) as gh:
-        resp = await gh.rest.issues.async_create_comment(owner, repo, pr_number, body=body)
+    async with github_installation_auth(installation_id, permissions={"issues": "write"}) as gh:
+        resp = await gh.client.rest.issues.async_create_comment(owner, repo, pr_number, body=body)
         comment = resp.parsed_data
 
         logger.info(

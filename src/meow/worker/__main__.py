@@ -12,9 +12,9 @@ import asyncio
 import mistralai.workflows as workflows
 
 from meow.common.logging import get_logger
-from meow.worker.workflows.github_event_handler import GithubEventHandler
+from meow.worker.workflows.pr_review_handler import PrReviewWorkflow
 
-_WORKFLOWS = [GithubEventHandler]
+_WORKFLOWS = [PrReviewWorkflow]
 
 
 def main() -> None:

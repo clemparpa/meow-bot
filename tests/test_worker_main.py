@@ -38,8 +38,8 @@ def test_main_starts_worker(caplog: pytest.LogCaptureFixture) -> None:
 
     run_worker.assert_awaited_once_with(worker_main._WORKFLOWS)
     assert len(worker_main._WORKFLOWS) == 1
-    assert worker_main._WORKFLOWS[0] is worker_main.GithubEventHandler
+    assert worker_main._WORKFLOWS[0] is worker_main.PrReviewWorkflow
 
     started: list[Any] = [r for r in caplog.records if r.message == "worker.started"]
     assert len(started) == 1
-    assert started[0].workflows == ["GithubEventHandler"]
+    assert started[0].workflows == ["PrReviewWorkflow"]

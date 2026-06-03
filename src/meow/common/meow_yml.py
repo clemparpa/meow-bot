@@ -13,7 +13,7 @@ import yaml
 from pydantic import ValidationError
 
 from meow.common.logging import get_logger
-from meow.worker.types import MeowConfig
+from meow.worker.models import MeowConfig
 
 __all__ = ["parse_meow_yml"]
 
