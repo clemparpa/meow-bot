@@ -20,3 +20,8 @@ data/*
 !.env.example
 *.pyc
 .claude/worktrees/*
+
+# Local dev overrides — used for smoke-testing the bot against a
+# personal GitHub App without committing the manifest or compose tweaks.
+compose.override.yml
+manifest/*.local.json
