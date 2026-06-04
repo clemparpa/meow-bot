@@ -49,9 +49,7 @@ async def run_vibe(task: VibeTask, sandbox_spec: PrSandboxSpec) -> VibeResult:
     the workflow framework applies its retry policy.
     """
     builder = (
-        SandboxBuilder(
-            config=SandboxBuilderConfig(delete_after_delay=_DELETE_AFTER_DELAY)
-        )
+        SandboxBuilder(config=SandboxBuilderConfig(delete_after_delay=_DELETE_AFTER_DELAY))
         .with_meow_secrets(
             installation_id=sandbox_spec.installation_id,
             repo_full_name=sandbox_spec.repo_full_name,

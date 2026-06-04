@@ -61,9 +61,12 @@ class VibeTask(BaseModel):
         """
         parts = [
             "vibe",
-            "--prompt", shlex.quote(self.prompt),
-            "--max-turns", str(self.max_turns),
-            "--max-price", str(self.max_price_usd),
+            "--prompt",
+            shlex.quote(self.prompt),
+            "--max-turns",
+            str(self.max_turns),
+            "--max-price",
+            str(self.max_price_usd),
         ]
         if self.agent is not None:
             parts += ["--agent", shlex.quote(self.agent)]
