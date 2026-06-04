@@ -46,11 +46,11 @@ class IssueCommentInput(UnsetAwareModel):
         return cls(
             action="created",
             installation_id=event.installation.id,  # ty: ignore[unresolved-attribute]
-            repo_full_name=event.repository.full_name,  # ty: ignore[unresolved-attribute]
-            issue_number=event.issue.number,  # ty: ignore[unresolved-attribute]
-            is_pr=event.issue.pull_request is not UNSET,  # ty: ignore[unresolved-attribute]
-            locked=event.issue.locked,  # ty: ignore[unresolved-attribute]
-            comment_body=event.comment.body,  # ty: ignore[unresolved-attribute]
-            sender_login=event.sender.login,  # ty: ignore[unresolved-attribute]
+            repo_full_name=event.repository.full_name,
+            issue_number=event.issue.number,
+            is_pr=event.issue.pull_request is not UNSET,
+            locked=event.issue.locked,
+            comment_body=event.comment.body,
+            sender_login=event.sender.login,
             delivery=ctx.delivery,
         )

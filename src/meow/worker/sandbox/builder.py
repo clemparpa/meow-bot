@@ -64,6 +64,7 @@ def pr_ref_name(pr_number: int) -> str:
 
 class SandboxBuilderConfig(BaseModel):
     """Timeouts and lifecycle settings for a builder-managed sandbox."""
+
     delete_after_delay: PositiveInt = 1200
     clone_timeout: PositiveInt = 120
     checkout_timeout: PositiveInt = 60
@@ -95,7 +96,6 @@ class SandboxBuilder:
     # permissions through `with_meow_secrets(..., permissions=...)`.
     _DEFAULT_TOKEN_PERMISSIONS: AppPermissionsType = {"contents": "read"}
 
-
     def __init__(self, config: SandboxBuilderConfig | None = None) -> None:
         self._config = config or SandboxBuilderConfig()
         self._env: dict[str, str] = {}
@@ -110,31 +110,18 @@ class SandboxBuilder:
         repo_full_name: str,
         permissions: AppPermissionsType | None = None,
     ) -> Self:
-        """Wire the Mistral API key and a freshly minted GitHub token.
-
-        ``MISTRAL_API_KEY`` is read from :class:`Settings` and added to
-        the sandbox env. ``GH_TOKEN`` is minted via
-        :func:`mint_installation_token` at ``__aenter__`` time (so the
-        ~1h token lifetime starts when the sandbox actually boots, not
-        when this method is called). gh picks ``GH_TOKEN`` up natively;
-        a follow-up ``gh auth setup-git`` step then installs gh as
-        git's credential helper for github.com, so subsequent
-        ``git clone https://github.com/...`` commands don't need the
-        token in the URL.
-        """
         settings = Settings()  # ty: ignore[missing-argument]
         self._env["MISTRAL_API_KEY"] = settings.mistral_api_key
-
 
         async def set_gh_token() -> None:
             async with github_installation_auth(
                 installation_id=installation_id,
                 repositories=[repo_full_name],
-                permissions=permissions if permissions else self._DEFAULT_TOKEN_PERMISSIONS
-            ) as gh: 
+                permissions=permissions if permissions else self._DEFAULT_TOKEN_PERMISSIONS,
+            ) as gh:
                 token = await gh.token()
-            
-            self._env["GH_TOKEN"] = token 
+
+            self._env["GH_TOKEN"] = token
 
         async def setup_git(sb: AsyncSandbox) -> None:
             await self._run(
@@ -160,10 +147,7 @@ class SandboxBuilder:
         ``git checkout`` handles both. Private repos require a prior
         :py:meth:`with_meow_secrets` call.
         """
-        clone_cmd = (
-            f"git clone https://github.com/{repo_full_name}.git "
-            f"{shlex.quote(WORKING_DIR)}"
-        )
+        clone_cmd = f"git clone https://github.com/{repo_full_name}.git {shlex.quote(WORKING_DIR)}"
         checkout_cmd = f"git checkout {shlex.quote(ref)}"
         clone_timeout = self._config.clone_timeout
         checkout_timeout = self._config.checkout_timeout
@@ -185,7 +169,6 @@ class SandboxBuilder:
 
         self._steps.append(_Step(name="clone_and_checkout", run=step))
         return self
-
 
     def with_pr_diff(
         self,
@@ -227,18 +210,37 @@ class SandboxBuilder:
         checkout_timeout = self._config.checkout_timeout
 
         async def step(sb: AsyncSandbox) -> None:
-            await self._run(sb, fetch_pr, cwd=WORKING_DIR, timeout=fetch_timeout,
-                            fail_msg=f"fetch PR #{pr_number} head failed")
-            await self._run(sb, verify_head, cwd=WORKING_DIR, timeout=checkout_timeout,
-                            fail_msg=f"PR #{pr_number} head SHA mismatch (stale webhook?)")
-            await self._run(sb, checkout_cmd, cwd=WORKING_DIR, timeout=checkout_timeout,
-                            fail_msg=f"detached checkout of {pr_ref} failed")
-            await self._run(sb, reset_cmd, cwd=WORKING_DIR, timeout=checkout_timeout,
-                            fail_msg=f"soft reset to base {base_sha} failed")
+            await self._run(
+                sb,
+                fetch_pr,
+                cwd=WORKING_DIR,
+                timeout=fetch_timeout,
+                fail_msg=f"fetch PR #{pr_number} head failed",
+            )
+            await self._run(
+                sb,
+                verify_head,
+                cwd=WORKING_DIR,
+                timeout=checkout_timeout,
+                fail_msg=f"PR #{pr_number} head SHA mismatch (stale webhook?)",
+            )
+            await self._run(
+                sb,
+                checkout_cmd,
+                cwd=WORKING_DIR,
+                timeout=checkout_timeout,
+                fail_msg=f"detached checkout of {pr_ref} failed",
+            )
+            await self._run(
+                sb,
+                reset_cmd,
+                cwd=WORKING_DIR,
+                timeout=checkout_timeout,
+                fail_msg=f"soft reset to base {base_sha} failed",
+            )
 
         self._steps.append(_Step(name="pr_diff", run=step))
         return self
-
 
     def with_memory(
         self,
@@ -279,14 +281,23 @@ class SandboxBuilder:
         checkout_timeout = self._config.checkout_timeout
 
         async def step(sb: AsyncSandbox) -> None:
-            await self._run(sb, write_cmd, cwd=WORKING_DIR, timeout=checkout_timeout,
-                            fail_msg="write memory file failed")
-            await self._run(sb, exclude_cmd, cwd=WORKING_DIR, timeout=checkout_timeout,
-                            fail_msg="git-ignore memory file failed")
+            await self._run(
+                sb,
+                write_cmd,
+                cwd=WORKING_DIR,
+                timeout=checkout_timeout,
+                fail_msg="write memory file failed",
+            )
+            await self._run(
+                sb,
+                exclude_cmd,
+                cwd=WORKING_DIR,
+                timeout=checkout_timeout,
+                fail_msg="git-ignore memory file failed",
+            )
 
         self._steps.append(_Step(name="memory", run=step))
-        return self        
-
+        return self
 
     async def __aenter__(self) -> AsyncSandbox:
         for prep in self._prep_steps:
@@ -355,6 +366,4 @@ class SandboxBuilder:
         result = await sandbox.exec(cmd, **kwargs)  # ty:ignore[invalid-argument-type]
         if result.exit_code != 0:
             err = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(
-                f"{fail_msg} (exit={result.exit_code}): {err[:1000]}"
-            )
+            raise RuntimeError(f"{fail_msg} (exit={result.exit_code}): {err[:1000]}")
