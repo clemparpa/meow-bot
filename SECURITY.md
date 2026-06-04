@@ -29,7 +29,7 @@ Instead, use the **GitHub Private Vulnerability Reporting** feature:
 Issues out of scope (please report upstream):
 
 - [`mistralai/mistral-vibe`](https://github.com/mistralai/mistral-vibe/security) — the agent harness itself.
-- [Daytona](https://www.daytona.io/) — sandbox provider.
+- [Koyeb](https://www.koyeb.com/) — sandbox provider.
 - Mistral Workflows — managed control plane.
 
 See [SPEC.md §12](SPEC.md) for the full threat model (loop prevention, HMAC validation, sandbox isolation, token down-scoping, budgeting).
