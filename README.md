@@ -28,7 +28,7 @@ Later versions add `CODE_REQUEST` (open a PR from a natural-language request), `
 
 - You host the worker on your own VPS via `docker compose up`.
 - You create your own GitHub App from the provided manifest (1-click flow).
-- You bring your own Mistral, Daytona, and GitHub App credentials.
+- You bring your own Mistral, Koyeb, and GitHub App credentials.
 
 No central service hosted by the maintainers. No quotas, no billing, no usage tracking. Just a Docker image you run.
 
@@ -41,12 +41,12 @@ Three services on the host:
 ```text
 GitHub → receiver (FastAPI, HMAC) → Mistral Workflows (managed)
                                           ↓
-                                       worker → Daytona sandbox (Vibe)
+                                       worker → Koyeb sandbox (Vibe)
                                           ↓
                                        GitHub (post comment)
 ```
 
-Mistral Workflows (durability, retries, cron) and Daytona (ephemeral sandboxes) are external managed services you also sign up for. See [SPEC.md §3](SPEC.md) for the detailed diagram.
+Mistral Workflows (durability, retries, cron) and Koyeb Sandboxes (ephemeral sandboxes with mistral-vibe pre-installed) are external managed services you also sign up for. See [SPEC.md §3](SPEC.md) for the detailed diagram.
 
 ## Quickstart
 
@@ -119,7 +119,7 @@ Full schema in [SPEC.md §10](SPEC.md).
 
 - Webhook bodies are validated with HMAC-SHA256 (`X-Hub-Signature-256`).
 - Installation tokens are minted just-in-time and down-scoped per intent (`contents: read` for review mode, etc.).
-- Vibe runs in an ephemeral Daytona sandbox with no host secrets mounted.
+- Vibe runs in an ephemeral Koyeb sandbox with no host secrets mounted.
 - `max_turns` and `max_price` are always enforced.
 - See [SECURITY.md](SECURITY.md) for vulnerability reporting, and [SPEC.md §12](SPEC.md) for the full threat model.
 

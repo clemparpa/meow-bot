@@ -7,7 +7,7 @@ Thanks for your interest in contributing. This document covers the local setup, 
 `meow-bot` is a self-hosted GitHub App made of three services running together via `docker compose`:
 
 - `receiver` — FastAPI app that validates GitHub webhooks (HMAC) and dispatches work.
-- `worker` — long-running Python process that drives Mistral Workflows, spawns Daytona sandboxes, and runs [Mistral Vibe](https://github.com/mistralai/mistral-vibe) on the target repo.
+- `worker` — long-running Python process that drives Mistral Workflows, spawns Koyeb sandboxes, and runs [Mistral Vibe](https://github.com/mistralai/mistral-vibe) on the target repo (vibe is pre-installed in `koyeb/sandbox`).
 - `caddy` — reverse proxy + automatic TLS.
 
 All Python code lives under `src/meow/` with a `src/` layout. See [SPEC.md](SPEC.md) for the architecture and roadmap.
@@ -41,7 +41,7 @@ npm i -g markdownlint-cli2
 git clone https://github.com/clemparpa/meow-bot.git
 cd meow-bot
 uv sync
-cp .env.example .env   # fill in once you have a GitHub App + Mistral + Daytona key
+cp .env.example .env   # fill in once you have a GitHub App + Mistral + Koyeb key
 ```
 
 To run the services locally:

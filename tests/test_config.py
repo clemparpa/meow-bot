@@ -16,9 +16,10 @@ _REQUIRED_ENV_VARS = (
     "GITHUB_APP_ID",
     "GITHUB_WEBHOOK_SECRET",
     "MISTRAL_API_KEY",
-    "DAYTONA_API_KEY",
+    "KOYEB_API_TOKEN",
     "GITHUB_APP_PRIVATE_KEY_PATH",
     "DEPLOYMENT_NAME",
+    "MEOW_BOT_LOGIN",
 )
 
 
@@ -41,8 +42,9 @@ def test_settings_raises_when_webhook_secret_missing(
     monkeypatch.setenv("GITHUB_APP_ID", "12345")
     # GITHUB_WEBHOOK_SECRET intentionally omitted.
     monkeypatch.setenv("MISTRAL_API_KEY", "mistral-key")
-    monkeypatch.setenv("DAYTONA_API_KEY", "daytona-key")
+    monkeypatch.setenv("KOYEB_API_TOKEN", "koyeb-token")
     monkeypatch.setenv("DEPLOYMENT_NAME", "test-deployment")
+    monkeypatch.setenv("MEOW_BOT_LOGIN", "meow-bot[bot]")
 
     with pytest.raises(ValidationError) as exc_info:
         Settings()  # ty: ignore[missing-argument]
@@ -63,8 +65,9 @@ def test_settings_loads_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> N
     monkeypatch.setenv("GITHUB_APP_ID", "42")
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cr3t")
     monkeypatch.setenv("MISTRAL_API_KEY", "mk-test")
-    monkeypatch.setenv("DAYTONA_API_KEY", "dk-test")
+    monkeypatch.setenv("KOYEB_API_TOKEN", "kk-test")
     monkeypatch.setenv("DEPLOYMENT_NAME", "meow-bot-test")
+    monkeypatch.setenv("MEOW_BOT_LOGIN", "meow-bot[bot]")
 
     settings = Settings()  # ty: ignore[missing-argument]
 
@@ -72,8 +75,9 @@ def test_settings_loads_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> N
     assert settings.github_app_id == "42"
     assert settings.github_webhook_secret == "s3cr3t"
     assert settings.mistral_api_key == "mk-test"
-    assert settings.daytona_api_key == "dk-test"
+    assert settings.koyeb_api_token == "kk-test"
     assert settings.deployment_name == "meow-bot-test"
+    assert settings.bot_login == "meow-bot[bot]"
     # Default value preserved when env var absent.
     assert settings.github_app_private_key_path == "/secrets/github-app.pem"
 
@@ -104,7 +108,10 @@ def test_env_example_rejected_when_copied_as_is(monkeypatch: pytest.MonkeyPatch,
         "github_app_id",
         "github_webhook_secret",
         "mistral_api_key",
-        "daytona_api_key",
+        "koyeb_api_token",
+        # bot_login surfaces under its validation_alias ("MEOW_BOT_LOGIN")
+        # rather than the Python attribute name.
+        "MEOW_BOT_LOGIN",
     } <= short_fields
 
 
@@ -116,8 +123,9 @@ def test_settings_private_key_path_override(monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.setenv("GITHUB_APP_ID", "42")
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cr3t")
     monkeypatch.setenv("MISTRAL_API_KEY", "mk-test")
-    monkeypatch.setenv("DAYTONA_API_KEY", "dk-test")
+    monkeypatch.setenv("KOYEB_API_TOKEN", "kk-test")
     monkeypatch.setenv("DEPLOYMENT_NAME", "meow-bot-test")
+    monkeypatch.setenv("MEOW_BOT_LOGIN", "meow-bot[bot]")
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_PATH", "/tmp/custom.pem")
 
     settings = Settings()  # ty: ignore[missing-argument]
