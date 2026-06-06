@@ -1,0 +1,45 @@
+name: E2E
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  health-ping:
+    name: Mistral Workflows connectivity smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Skip on forks — secrets are unavailable, the job would only ever fail.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      # `tests/conftest.py` clobbers MISTRAL_API_KEY at import time; expose the
+      # real key under a dedicated name and let the test restore it at runtime.
+      MEOW_E2E_MISTRAL_API_KEY: ${{ secrets.MEOW_E2E_MISTRAL_API_KEY }}
+      MEOW_E2E_ENABLED: "1"
+      # Stubs for the Settings model (min_length=1) — same values as tests/conftest.py.
+      MEOW_DOMAIN: e2e.local
+      GITHUB_APP_ID: "1"
+      GITHUB_WEBHOOK_SECRET: e2e-webhook-secret
+      KOYEB_API_TOKEN: e2e-koyeb-token
+      MEOW_BOT_LOGIN: meow-bot
+      GITHUB_APP_PRIVATE_KEY_PATH: /tmp/fake.pem
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.11.15"
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Stub GitHub App private key
+        run: touch /tmp/fake.pem
+
+      - name: Health-ping workflow against Mistral
+        run: uv run pytest tests/e2e -v
