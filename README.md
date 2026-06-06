@@ -50,16 +50,18 @@ Mistral Workflows (durability, retries, cron) and Koyeb Sandboxes (ephemeral san
 
 ## Quickstart
 
-> Quickstart is being written in tandem with `v0.0.x`. For now, see the placeholder at [docs/quickstart.md](docs/quickstart.md) (added in the scaffold commits).
+**Step-by-step guide: [docs/quickstart.md](docs/quickstart.md).** It walks you from a blank VPS to `@<bot> review` answering on a real PR — VPS provisioning, DNS, GitHub App creation, and `.env` configuration included.
 
-The intended flow targets `< 15 min` for a developer who already runs Docker on a VPS:
+High-level flow for a developer already running Docker on a VPS:
 
 1. Provision a VPS with a domain pointing at it.
 2. Clone this repo.
-3. Click the **Create my Meow App** link in the README (the GitHub App manifest flow registers the App with the right permissions in one click).
+3. Use the [GitHub App manifest](manifest/app-manifest.yml) to create your App in one click (permissions and events pre-filled).
 4. Drop the generated `.pem` and webhook secret into `.env`.
 5. `docker compose up -d`.
 6. Install your new App on a target repo, then `@<your-bot> review` on a PR.
+
+For internal architecture (how the 3 services collaborate, the webhook flow end-to-end), see [docs/architecture.md](docs/architecture.md).
 
 ### Local boot check (no GitHub App needed)
 
