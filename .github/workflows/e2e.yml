@@ -13,7 +13,9 @@ jobs:
     # Skip on forks — secrets are unavailable, the job would only ever fail.
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     env:
-      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      # `tests/conftest.py` clobbers MISTRAL_API_KEY at import time; expose the
+      # real key under a dedicated name and let the test restore it at runtime.
+      MEOW_E2E_MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
       MEOW_E2E_ENABLED: "1"
       # Unique per-run queue so concurrent jobs don't poach each other's tasks.
       DEPLOYMENT_NAME: meow-bot-e2e-${{ github.run_id }}

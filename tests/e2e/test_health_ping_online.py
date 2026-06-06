@@ -3,8 +3,15 @@
 Spins up a real worker against `api.mistral.ai`, registers a trivial
 `HealthPing` workflow + activity, triggers an execution via the SDK,
 and waits for completion under a 60s budget. Skipped unless both
-`MISTRAL_API_KEY` and `MEOW_E2E_ENABLED=1` are set, so the suite is a
-no-op locally and on developer pre-push hooks.
+`MEOW_E2E_MISTRAL_API_KEY` and `MEOW_E2E_ENABLED=1` are set, so the
+suite is a no-op locally and on developer pre-push hooks.
+
+We use `MEOW_E2E_MISTRAL_API_KEY` instead of reading `MISTRAL_API_KEY`
+directly because `tests/conftest.py` force-overwrites the latter with
+a fake value at module load time (needed so the receiver's Settings
+model doesn't crash when collecting the other tests). The test
+restores the real key into `MISTRAL_API_KEY` at runtime — safe because
+this test is the only one that runs when the e2e workflow fires.
 
 Goal: catch breakage in the SDK / control plane / worker plumbing
 *before* the review pipeline depends on it (S17 dogfood). Does not
@@ -27,8 +34,8 @@ from mistralai.workflows.testing import execute_workflow_and_wait
 from tests.e2e.workflows.health_ping import HEALTH_PING_WORKFLOW, HealthPingWorkflow
 
 pytestmark = pytest.mark.skipif(
-    not os.getenv("MISTRAL_API_KEY") or not os.getenv("MEOW_E2E_ENABLED"),
-    reason="online e2e test requires MISTRAL_API_KEY and MEOW_E2E_ENABLED=1",
+    not os.getenv("MEOW_E2E_MISTRAL_API_KEY") or not os.getenv("MEOW_E2E_ENABLED"),
+    reason="online e2e test requires MEOW_E2E_MISTRAL_API_KEY and MEOW_E2E_ENABLED=1",
 )
 
 # How long we give the worker to register itself with the control plane
@@ -43,6 +50,13 @@ _EXECUTION_TIMEOUT_SECONDS = 30
 
 @pytest.mark.asyncio
 async def test_health_ping_online() -> None:
+    # `tests/conftest.py` forces `MISTRAL_API_KEY` to a fake value at
+    # module load time so the receiver's Settings model doesn't crash
+    # during collection of the *other* tests. Restore the real one from
+    # the e2e-specific env var so `run_worker` can authenticate.
+    api_key = os.environ["MEOW_E2E_MISTRAL_API_KEY"]
+    os.environ["MISTRAL_API_KEY"] = api_key
+
     # Per-run task queue so concurrent CI jobs don't collide on the
     # control plane's queue dispatch.
     deployment_name = f"meow-bot-e2e-{uuid.uuid4().hex[:8]}"
@@ -52,7 +66,6 @@ async def test_health_ping_online() -> None:
     try:
         await asyncio.sleep(_WORKER_BOOTSTRAP_SECONDS)
 
-        api_key = os.environ["MISTRAL_API_KEY"]
         async with httpx.AsyncClient(
             base_url="https://api.mistral.ai",
             headers={"Authorization": f"Bearer {api_key}"},
