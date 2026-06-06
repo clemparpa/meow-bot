@@ -12,11 +12,12 @@ Implements the v0.1.0 receiver described in ``spec.md`` §6 and
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from githubkit.webhooks import parse
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from meow.common.config import Settings
 from meow.common.github.webhook import InvalidSignature, verify_signature
@@ -33,6 +34,15 @@ settings = Settings()  # ty: ignore[missing-argument]
 logger = get_logger("receiver")
 
 app = FastAPI(title="meow-receiver", version="0.1.0")
+
+
+WorkflowDispatcher = Callable[[str, BaseModel, WebhookContext], Awaitable[dict[str, Any]]]
+
+
+def get_workflow_dispatcher() -> WorkflowDispatcher:
+    # Indirection so tests can swap `trigger_workflow` via
+    # `app.dependency_overrides` without touching the Mistral client.
+    return trigger_workflow
 
 
 async def verified_webhook(
@@ -57,6 +67,7 @@ async def healthz() -> dict[str, str]:
 @app.post("/gh/webhook")
 async def gh_webhook(
     auth: tuple[bytes, str | None, str | None] = Depends(verified_webhook),
+    dispatcher: WorkflowDispatcher = Depends(get_workflow_dispatcher),  # noqa: B008
 ) -> dict[str, Any]:
     body, event, delivery = auth
     if not event:
@@ -128,7 +139,7 @@ async def gh_webhook(
             },
         )
         if workflow_id is not None:
-            return await trigger_workflow(workflow_id, input_model, ctx)
+            return await dispatcher(workflow_id, input_model, ctx)
         # method is non-None whenever workflow_id is None — guaranteed by on_event.
         assert method is not None
         return await method(input_model, ctx)
