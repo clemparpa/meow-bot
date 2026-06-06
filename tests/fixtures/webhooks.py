@@ -110,6 +110,10 @@ def issue_comment_payload(
 
     return {
         "action": action,
+        "installation": {
+            "id": 99,
+            "node_id": "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uOTk=",
+        },
         "comment": {
             "author_association": "NONE",
             "body": body,
