@@ -15,7 +15,7 @@ jobs:
     env:
       # `tests/conftest.py` clobbers MISTRAL_API_KEY at import time; expose the
       # real key under a dedicated name and let the test restore it at runtime.
-      MEOW_E2E_MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MEOW_E2E_MISTRAL_API_KEY: ${{ secrets.MEOW_E2E_MISTRAL_API_KEY }}
       MEOW_E2E_ENABLED: "1"
       # Stubs for the Settings model (min_length=1) — same values as tests/conftest.py.
       MEOW_DOMAIN: e2e.local
