@@ -12,7 +12,7 @@ Distribué comme un **projet OSS self-hostable**. Chaque utilisateur :
 
 - crée sa propre GitHub App via un **manifest** fourni (flow en 1 clic),
 - héberge le worker chez lui (`docker compose up`) sur n'importe quel VPS Docker-capable,
-- fournit ses propres clés (Mistral, GitHub App, Daytona) — **BYOK strict**.
+- fournit ses propres clés (Mistral, GitHub App, Koyeb) — **BYOK strict**.
 
 Aucun mode SaaS pour l'instant. Aucune dépendance vers un service hébergé par les mainteneurs. Pas de quotas, pas de billing, pas d'analytics centralisée.
 
@@ -22,7 +22,7 @@ Aucun mode SaaS pour l'instant. Aucune dépendance vers un service hébergé par
 - **BYOK** : zéro secret partagé entre instances. Chaque self-hoster paie ses appels.
 - **Self-host friendly** : quickstart visé `< 15 min` pour un dev qui sait lancer Docker sur un VPS.
 - **Durable** : un crash worker ou sandbox ne perd pas la tâche en cours (Mistral Workflows).
-- **Isolation forte** : tout code généré ou exécuté tourne dans un sandbox Daytona éphémère, jamais sur l'hôte.
+- **Isolation forte** : tout code généré ou exécuté tourne dans un sandbox Koyeb éphémère, jamais sur l'hôte.
 - **Read-only par défaut** : v0.1 ne modifie aucun repo. Les modes write arrivent plus tard, conditionnés à l'implémentation des budgets.
 - **Pas de boucle** : le bot ne se répond jamais à lui-même.
 
@@ -33,7 +33,7 @@ Aucun mode SaaS pour l'instant. Aucune dépendance vers un service hébergé par
 - Multi-provider LLM (Mistral only).
 - Cron proactif / RepoScanner (reporté à v0.5).
 - Mode SaaS hébergé par les mainteneurs (peut-être un jour, sous-projet séparé).
-- Daytona self-host (managé only).
+- Koyeb self-host (managé only).
 - UI web, dashboard, métriques Prometheus.
 
 ## 2. Stack
@@ -42,7 +42,7 @@ Aucun mode SaaS pour l'instant. Aucune dépendance vers un service hébergé par
 |---|---|---|
 | Orchestration | `mistralai-workflows` (service managé Mistral) | Durabilité, cron futur, signals, retries. Le user a déjà un compte Mistral pour la clé LLM, le surcoût d'inscription est nul. |
 | Agent codeur | `mistral-vibe` OSS en mode `vibe.core.run_programmatic` | Harness mature, Apache-2.0, API Python programmatique. |
-| Sandbox | Daytona managé | Démarrage <100ms, snapshots, SDK Python. Self-host différé. |
+| Sandbox | Koyeb managé | Sandbox éphémères avec image custom (`meow-base` pré-build avec `mistral-vibe`), SDK Python. Self-host différé. |
 | Webhook receiver | FastAPI minimal | Mince, juste valider HMAC + `start_execution`. |
 | Worker | Process Python (`workflows.run_worker`) | Tourne 24/7, idle quand rien à faire. |
 | GitHub SDK | `githubkit` (à partir de **v0.1.0**) | Modèles Pydantic typés pour tous les webhooks + client REST/GraphQL async + helpers d'auth GitHub App (JWT, installation tokens). Généré depuis les schémas OpenAPI officiels GitHub, donc toujours à jour. **Non utilisé en v0.0.x** : le receiver minimal valide juste l'HMAC, la lib n'apporte rien à ce stade. Remplace l'usage de `PyGithub` initialement envisagé. |
@@ -60,7 +60,7 @@ flowchart LR
     RX -->|start_execution| WF[Mistral Workflows<br/>managed]
     WF -.->|dispatch| W[meow-worker<br/>VPS du self-hoster]
     W -->|REST/GraphQL| GH
-    W -->|spawn| DS[Daytona Sandbox<br/>éphémère]
+    W -->|spawn| DS[Koyeb Sandbox<br/>éphémère]
     DS -->|vibe.core.run_programmatic| DS
 ```
 
@@ -70,7 +70,7 @@ Trois services à faire tourner soi-même (tout sur le même VPS) :
 2. **`worker`** — process Python long-running, connecté au control plane Mistral Workflows.
 3. **`caddy`** — reverse proxy + TLS automatique (Let's Encrypt).
 
-Daytona et Mistral Workflows sont des **services managés externes** auxquels le self-hoster s'inscrit. Les sandboxes sont créés à la demande et détruits après usage.
+Koyeb et Mistral Workflows sont des **services managés externes** auxquels le self-hoster s'inscrit. Les sandboxes sont créés à la demande et détruits après usage.
 
 ## 4. Onboarding self-hoster
 
@@ -80,14 +80,14 @@ Cible : **un dev capable de lancer `docker compose up` sur un VPS, en moins de 1
 
 - VPS Linux (Hetzner CX22 ~5€/mois suffit), Docker + Docker Compose installés.
 - Un nom de domaine pointant sur le VPS (pour HTTPS du webhook).
-- Comptes : **Mistral** (API key + Workflows), **Daytona** (API key).
+- Comptes : **Mistral** (API key + Workflows), **Koyeb** (API token).
 
 ### 4.2 Flow
 
 1. **Cloner le repo** : `git clone https://github.com/clemparpa/meow-bot && cd meow-bot`.
 2. **Créer la GitHub App via manifest** : cliquer sur le lien `Create my Meow App` du README. GitHub redirige vers une page qui crée l'App à partir de [`manifest/app-manifest.yml`](manifest/app-manifest.yml) (permissions, events, webhook URL pré-remplie). En retour : `app_id`, `private_key.pem`, `webhook_secret`.
 3. **Renseigner `.env`** depuis `.env.example` :
-   - `MEOW_DOMAIN`, `GITHUB_APP_ID`, `GITHUB_WEBHOOK_SECRET`, `MISTRAL_API_KEY`, `DAYTONA_API_KEY`
+   - `MEOW_DOMAIN`, `GITHUB_APP_ID`, `GITHUB_WEBHOOK_SECRET`, `MISTRAL_API_KEY`, `KOYEB_API_TOKEN`
    - Déposer `github-app.pem` dans `./secrets/`.
 4. **Lancer** : `docker compose up -d`. Caddy obtient le certificat Let's Encrypt automatiquement.
 5. **Installer l'App sur ses repos** depuis l'UI GitHub.
@@ -192,7 +192,7 @@ steps:
   3. ctx = fetch_pr_context(repo, pr_number, installation_id)
        → diff, fichiers modifiés, .meow.yml du repo cible
   4. result = run_review_in_sandbox(repo, ctx, cfg)
-       → spawn Daytona, clone repo (read-only token), lance vibe en mode read-only
+       → spawn Koyeb sandbox, clone repo (read-only token), lance vibe en mode read-only
        → renvoie un rapport markdown
   5. post_pr_comment(repo, pr_number, result.report)
 ```
@@ -214,7 +214,7 @@ v0.2+ : créera les schedules `RepoScanner` (cron proactif) par installation.
 | Activity | Effet | Retries |
 |---|---|---|
 | `fetch_pr_context` | Charge PR + diff + `.meow.yml` via le client REST async de `githubkit` | 3, exp backoff |
-| `run_review_in_sandbox` | **Spawn Daytona + clone + `vibe.core.run_programmatic` read-only + capture rapport** | 1, non-idempotent |
+| `run_review_in_sandbox` | **Spawn Koyeb sandbox + clone + `vibe.core.run_programmatic` read-only + capture rapport** | 1, non-idempotent |
 | `post_pr_comment` | POST commentaire via GitHub API (scrubbing secrets en amont) | 5, idempotence par hash du body |
 | `register_installation` | Log dans `events.jsonl` | 3 |
 
@@ -231,7 +231,7 @@ async def run_review_in_sandbox(
     token = mint_installation_token(installation_id, repo, permissions={"contents": "read"})
     prompt = render_template("review.md", pr_diff=cfg.diff, agents_md=cfg.agents_md)
 
-    async with daytona.create(snapshot="meow-base") as sandbox:
+    async with koyeb_sandbox.create(image="meow-base") as sandbox:
         await sandbox.exec(f"git clone https://x-access-token:{token}@github.com/{repo} /work")
         await sandbox.exec(f"gh pr checkout {pr_number}", cwd="/work")
         result = await sandbox.run_python(
@@ -246,15 +246,15 @@ async def run_review_in_sandbox(
 
 `start_to_close_timeout` côté workflow : **35 min**. **Pas de retry automatique**.
 
-### 8.5 Snapshot Daytona `meow-base`
+### 8.5 Sandbox image Koyeb `meow-base`
 
-Pré-construit, contient :
+Image Docker pré-construite et poussée sur ghcr.io (cf. [.github/workflows/sandbox-image.yml](.github/workflows/sandbox-image.yml)), contient :
 
 - Ubuntu + Python 3.13 + git + `gh` CLI
 - `mistral-vibe` installé en venv système
 - Pré-configuration `.vibe/` minimale
 
-Auto-pause à **30 secondes** (vs 15 min default).
+La sandbox est détruite en fin d'activity (`run_review_in_sandbox`).
 
 ## 9. Profils d'intent — sécurité par action
 
@@ -342,7 +342,7 @@ Surface réduite parce que tout est read-only :
 | Menace | Mitigation |
 |---|---|
 | Prompt injection via diff PR fork | (a) Read-only ; le bot peut au pire poster un commentaire bizarre. (b) Sanitisation Unicode du diff (zero-width, bidi overrides, BOM) côté `fetch_pr_context`. |
-| Exfiltration via `bash` | Sandbox Daytona isolé, pas de secrets de l'hôte montés, token GH scopé `contents: read`. Egress whitelist v0.x+. |
+| Exfiltration via `bash` | Sandbox Koyeb isolé, pas de secrets de l'hôte montés, token GH scopé `contents: read`. Egress whitelist v0.x+. |
 | Burn de tokens Mistral du self-hoster | `max_turns` + `max_price` cappés (defaults : 15 turns / $0.50). Budgets par thread arrivent v0.2. |
 | Loop bot↔bot | Filtre `sender.login` au receiver. |
 | Webhook spoofing | HMAC obligatoire. |
@@ -447,11 +447,11 @@ TLS automatique via Let's Encrypt.
 Montés read-only dans `/secrets/` :
 
 - `github-app.pem` — clé privée de l'App.
-- `.env` — `MISTRAL_API_KEY`, `DAYTONA_API_KEY`, `GITHUB_APP_ID`, `GITHUB_WEBHOOK_SECRET`, `MEOW_DOMAIN`.
+- `.env` — `MISTRAL_API_KEY`, `KOYEB_API_TOKEN`, `GITHUB_APP_ID`, `GITHUB_WEBHOOK_SECRET`, `MEOW_DOMAIN`.
 
 ### 15.4 Sizing recommandé
 
-VPS modeste : **2 vCPU / 4 Go RAM** (Hetzner CX22 ~5€/mois). Le worker est I/O bound — l'essentiel du travail tourne chez Daytona.
+VPS modeste : **2 vCPU / 4 Go RAM** (Hetzner CX22 ~5€/mois). Le worker est I/O bound — l'essentiel du travail tourne chez Koyeb.
 
 ## 16. Structure du repo
 
@@ -499,7 +499,9 @@ meow-bot/
 │           │   ├── post_pr_comment.py
 │           │   └── register_installation.py
 │           └── sandbox/
-│               └── daytona.py       # wrapper SDK Daytona
+│               ├── builder.py       # wrapper SDK Koyeb (spawn / destroy)
+│               ├── Dockerfile       # définition de l'image meow-base
+│               └── sandbox_files/   # fichiers copiés dans l'image (configs Vibe, etc.)
 ├── docs/
 │   ├── quickstart.md                # le quickstart 15-min
 │   ├── self-hosting.md              # tuning, backups, troubleshooting
@@ -532,7 +534,7 @@ meow-bot/
 
 ## 18. Tests & dogfood
 
-- **Unit / intégration** : `pytest` sur les modules `common/*` et `workflows/*` avec mocks pour Mistral Workflows et Daytona. CI verte requise pour merge.
+- **Unit / intégration** : `pytest` sur les modules `common/*` et `workflows/*` avec mocks pour Mistral Workflows et Koyeb. CI verte requise pour merge.
 - **Dogfood** : dès v0.1, l'instance officielle (hébergée par le mainteneur) est installée sur `clemparpa/meow-bot`. Workflow `.github/workflows/dogfood.yml` n'est **pas nécessaire** (c'est le bot lui-même qui s'auto-applique via webhooks). Si une régression échappe au CI, elle se voit sur la prochaine PR.
 - **Smoke e2e** : checklist manuelle (~10 min) avant chaque release tag, documentée dans [docs/release.md](docs/release.md) à créer.
 
