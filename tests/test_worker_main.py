@@ -63,6 +63,7 @@ def test_main_starts_worker(caplog: pytest.LogCaptureFixture) -> None:
     started: list[Any] = [r for r in caplog.records if r.message == "worker.started"]
     assert len(started) == 1
     assert started[0].workflows == ["PrReviewWorkflow"]
+    assert started[0].liveness_port == worker_main._DEFAULT_LIVENESS_PORT
 
 
 def test_main_uses_liveness_port_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

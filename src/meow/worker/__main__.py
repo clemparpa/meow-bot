@@ -13,6 +13,7 @@ nothing to probe and the service is reaped as unhealthy.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 
 import mistralai.workflows as workflows
@@ -43,8 +44,15 @@ async def _liveness_listener(port: int) -> None:
         await server.serve_forever()
 
 
-async def _run() -> None:
+async def _run(logger: logging.Logger) -> None:
     port = int(os.environ.get("MEOW_WORKER_LIVENESS_PORT", _DEFAULT_LIVENESS_PORT))
+    logger.info(
+        "worker.started",
+        extra={
+            "workflows": [w.__name__ for w in _WORKFLOWS],
+            "liveness_port": port,
+        },
+    )
     worker_task = asyncio.create_task(workflows.run_worker(_WORKFLOWS))
     listener_task = asyncio.create_task(_liveness_listener(port))
     try:
@@ -66,8 +74,7 @@ async def _run() -> None:
 
 def main() -> None:
     logger = get_logger("worker")
-    logger.info("worker.started", extra={"workflows": [w.__name__ for w in _WORKFLOWS]})
-    asyncio.run(_run())
+    asyncio.run(_run(logger))
 
 
 if __name__ == "__main__":
