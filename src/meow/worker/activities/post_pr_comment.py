@@ -1,13 +1,16 @@
 """Activity ``post_pr_comment``.
 
 Publishes a vibe result as a PR comment via githubkit. Auth is delegated
-to ``github_installation_auth``, which mints an ``issues:write``
-installation token for the call.
+to ``github_installation_auth``, which mints an installation token scoped
+to ``issues:write`` + ``pull_requests:write`` for the call.
 
 Note on the endpoint: GitHub treats PR comments as *issue* comments
 (``POST /repos/{owner}/{repo}/issues/{number}/comments``); the
 ``pull_requests`` REST namespace is reserved for in-line review-comments,
-which v0.1.0 does not produce.
+which v0.1.0 does not produce. Even so, commenting on a *pull request* via
+that shared endpoint requires the ``pull_requests:write`` permission (GitHub
+checks the underlying resource type) — ``issues:write`` alone yields a 403.
+Both scopes are granted by the app manifest, so we request both.
 
 The 65535-char GitHub comment limit is not enforced here — the activity
 will surface a 422 from the API if vibe ever produces an over-long body.
@@ -82,7 +85,11 @@ async def post_pr_comment(
 
     body = f"{_HEADER}\n\n---\n\n{_build_body(result)}"
 
-    async with github_installation_auth(installation_id, permissions={"issues": "write"}) as gh:
+    async with github_installation_auth(
+        installation_id,
+        permissions={"issues": "write", "pull_requests": "write"},
+        repositories=[repo_full_name],
+    ) as gh:
         resp = await gh.client.rest.issues.async_create_comment(owner, repo, pr_number, body=body)
         comment = resp.parsed_data
 

@@ -14,16 +14,21 @@ Typical use::
           .with_meow_secrets(installation_id=42, repo_full_name="o/r")
           .with_clone(repo_full_name="o/r", ref="main", target_dir="/work/repo")
     ) as sandbox:
-        result = await sandbox.exec("...", cwd="/work/repo")
+        exit_code, stdout, stderr = await exec_polling(
+            sandbox, "...", cwd="/work/repo", timeout=60
+        )
 """
 
 from __future__ import annotations
 
+import asyncio
 import shlex
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Self
+from uuid import uuid4
 
 from koyeb import AsyncSandbox
 from pydantic import BaseModel, PositiveInt
@@ -36,11 +41,108 @@ __all__ = [
     "MEMORY_FILE",
     "SandboxBuilder",
     "SandboxBuilderConfig",
+    "SandboxExecTimeout",
     "WORKING_DIR",
+    "exec_polling",
     "pr_ref_name",
 ]
 
 logger = get_logger("worker")
+
+
+# Poll backoff for exec_polling. Start fast so short prep commands finish
+# without noticeable latency, then back off to a cap so a long vibe run
+# borrows a worker thread for only milliseconds per poll (the rest is
+# ``await asyncio.sleep``, which frees both the event loop and the executor
+# thread pool — so one sandbox's command never queues another's launch).
+_POLL_START_INTERVAL = 0.1
+_POLL_MAX_INTERVAL = 3.0
+
+
+class SandboxExecTimeout(RuntimeError):
+    """A polled command did not complete within its deadline."""
+
+    def __init__(self, timeout: int) -> None:
+        super().__init__(f"command exceeded {timeout}s deadline")
+        self.timeout = timeout
+
+
+async def _find_process(sandbox: AsyncSandbox, pid: str):  # noqa: ANN202 - koyeb ProcessInfo
+    for proc in await sandbox.list_processes():
+        if proc.id == pid:
+            return proc
+    return None
+
+
+async def _safe_kill(sandbox: AsyncSandbox, pid: str) -> None:
+    try:
+        await sandbox.kill_process(pid)
+    except Exception as exc:  # best-effort; the sandbox is torn down anyway
+        logger.warning("sandbox.kill_failed", extra={"pid": pid, "error": str(exc)})
+
+
+async def _read_file_or_empty(sandbox: AsyncSandbox, path: str) -> str:
+    """Read a sandbox file, returning "" if it is missing.
+
+    The output files may be absent if the process died before the shell's
+    ``exec`` redirect created them — treat that as no output rather than
+    failing the whole run.
+    """
+    try:
+        info = await sandbox.filesystem.read_file(path)
+    except Exception:
+        return ""
+    content = info.content
+    return content if isinstance(content, str) else content.decode("utf-8", "replace")
+
+
+async def exec_polling(
+    sandbox: AsyncSandbox,
+    cmd: str,
+    *,
+    cwd: str | None = None,
+    timeout: int,
+    poll_max_interval: float = _POLL_MAX_INTERVAL,
+) -> tuple[int, str, str]:
+    """Run ``cmd`` as a background process and poll until it completes.
+
+    A blocking ``sandbox.exec`` is a single long-held HTTP request that
+    Koyeb's edge kills with a 504 once it exceeds the gateway timeout. Here
+    we ``launch_process`` and poll ``list_processes`` instead: every HTTP
+    call is short, so neither the event loop nor a thread is held for the
+    duration of the command — concurrent sandbox launches never block.
+
+    ``stdout``/``stderr`` are captured via a shell ``exec`` redirect (robust
+    to compound commands, heredocs and subshells, unlike a trailing ``>``)
+    and read back from temp files once the process exits.
+
+    Returns ``(exit_code, stdout, stderr)``. Raises :class:`SandboxExecTimeout`
+    if the command has not finished within ``timeout`` seconds (the process
+    is killed first).
+    """
+    run_id = uuid4().hex
+    out_path = f"/tmp/meow-{run_id}.out"  # noqa: S108 - sandbox-local scratch
+    err_path = f"/tmp/meow-{run_id}.err"  # noqa: S108 - sandbox-local scratch
+    wrapped = f"exec >{shlex.quote(out_path)} 2>{shlex.quote(err_path)}\n{cmd}"
+
+    pid = await sandbox.launch_process(wrapped, cwd=cwd)
+
+    deadline = time.monotonic() + timeout
+    interval = _POLL_START_INTERVAL
+    while True:
+        await asyncio.sleep(interval)
+        proc = await _find_process(sandbox, pid)
+        if proc is not None and (proc.status == "completed" or proc.completed_at):
+            exit_code = proc.exit_code if proc.exit_code is not None else 1
+            break
+        if time.monotonic() >= deadline:
+            await _safe_kill(sandbox, pid)
+            raise SandboxExecTimeout(timeout)
+        interval = min(interval * 2, poll_max_interval)
+
+    stdout = await _read_file_or_empty(sandbox, out_path)
+    stderr = await _read_file_or_empty(sandbox, err_path)
+    return exit_code, stdout, stderr
 
 
 # Where with_clone drops the repo inside the sandbox. The factory in
@@ -360,10 +462,13 @@ class SandboxBuilder:
         timeout: int,
         fail_msg: str,
     ) -> None:
-        kwargs: dict[str, object] = {"timeout": timeout}
-        if cwd is not None:
-            kwargs["cwd"] = cwd
-        result = await sandbox.exec(cmd, **kwargs)  # ty:ignore[invalid-argument-type]
-        if result.exit_code != 0:
-            err = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(f"{fail_msg} (exit={result.exit_code}): {err[:1000]}")
+        # Prep steps run via the same non-blocking polling path as the vibe
+        # run, so a slow clone never holds a worker thread and stalls another
+        # review's sandbox launch.
+        try:
+            exit_code, stdout, stderr = await exec_polling(sandbox, cmd, cwd=cwd, timeout=timeout)
+        except SandboxExecTimeout as exc:
+            raise RuntimeError(f"{fail_msg} (timeout after {exc.timeout}s)") from exc
+        if exit_code != 0:
+            err = (stderr or stdout or "").strip()
+            raise RuntimeError(f"{fail_msg} (exit={exit_code}): {err[:1000]}")

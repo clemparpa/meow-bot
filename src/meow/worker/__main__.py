@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import mistralai.workflows as workflows
 
@@ -25,6 +26,14 @@ _WORKFLOWS = [PrReviewWorkflow]
 # Matches the port Koyeb pre-configures on Worker services. Overridable so
 # the same image runs on hosts that probe a different port.
 _DEFAULT_LIVENESS_PORT = 8000
+
+# The koyeb SDK runs every sync HTTP call through ``loop.run_in_executor(None,
+# …)`` — i.e. the loop's *default* ThreadPoolExecutor, capped at
+# ``min(32, cpu+4)`` (~5 on a 1-CPU instance) and shared process-wide. With
+# many concurrent reviews, that bound could serialise sandbox launches. The
+# polling exec path already keeps each thread-borrow to milliseconds; a larger
+# dedicated pool removes the cap entirely as cheap insurance.
+_KOYEB_EXECUTOR_WORKERS = 32
 
 
 async def _liveness_listener(port: int) -> None:
@@ -44,6 +53,13 @@ async def _liveness_listener(port: int) -> None:
 
 
 async def _run() -> None:
+    # Size the default executor for concurrent koyeb SDK calls (see constant).
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(
+            max_workers=_KOYEB_EXECUTOR_WORKERS,
+            thread_name_prefix="koyeb-sdk",
+        )
+    )
     port = int(os.environ.get("MEOW_WORKER_LIVENESS_PORT", _DEFAULT_LIVENESS_PORT))
     worker_task = asyncio.create_task(workflows.run_worker(_WORKFLOWS))
     listener_task = asyncio.create_task(_liveness_listener(port))
