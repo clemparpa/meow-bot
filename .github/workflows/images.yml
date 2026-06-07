@@ -12,6 +12,10 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "src/meow/**"
+      # These are build inputs for the sandbox image (sandbox-image.yml),
+      # not runtime code — exclude so receiver/worker don't rebuild on touch.
+      - "!src/meow/worker/sandbox/Dockerfile"
+      - "!src/meow/worker/sandbox/sandbox_files/**"
       - ".github/workflows/images.yml"
   workflow_dispatch:
 
