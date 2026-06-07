@@ -30,11 +30,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # ca-certificates: TLS for git clone / curl / vibe API / gh
 # curl:            fetch the installers below
 # git:             review activity clones the PR repo at runtime
+# xz-utils:        `tar -xJ` for the Node.js tarball (.tar.xz)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
       git \
+      xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # --- GitHub CLI (pinned tarball, no extra apt repo) ---------------------
