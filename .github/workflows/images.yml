@@ -1,0 +1,47 @@
+name: Build images
+
+# Builds the receiver and worker images and pushes them to Docker Hub.
+# Triggered when the Dockerfile, source tree, or locked deps change on main,
+# plus a manual button for ad-hoc rebuilds.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "src/meow/**"
+      - ".github/workflows/images.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      # Surface both build outcomes — a broken worker shouldn't hide a green receiver.
+      fail-fast: false
+      matrix:
+        target: [receiver, worker]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/meow-${{ matrix.target }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/meow-${{ matrix.target }}:${{ github.sha }}
+          # Scope per target so matrix jobs don't clobber each other's cache.
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
