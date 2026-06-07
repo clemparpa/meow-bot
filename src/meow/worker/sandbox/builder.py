@@ -81,19 +81,21 @@ async def _safe_kill(sandbox: AsyncSandbox, pid: str) -> None:
         logger.warning("sandbox.kill_failed", extra={"pid": pid, "error": str(exc)})
 
 
-async def _read_file_or_empty(sandbox: AsyncSandbox, path: str) -> str:
-    """Read a sandbox file, returning "" if it is missing.
+async def _read_file_or_empty(sandbox: AsyncSandbox, path: str) -> tuple[str, bool]:
+    """Read a sandbox file, returning ``("", False)`` if it is missing.
 
     The output files may be absent if the process died before the shell's
     ``exec`` redirect created them — treat that as no output rather than
-    failing the whole run.
+    failing the whole run. The second tuple element reports whether the
+    file was actually present (vs. genuinely empty), for diagnostics.
     """
     try:
         info = await sandbox.filesystem.read_file(path)
     except Exception:
-        return ""
+        return "", False
     content = info.content
-    return content if isinstance(content, str) else content.decode("utf-8", "replace")
+    text = content if isinstance(content, str) else content.decode("utf-8", "replace")
+    return text, True
 
 
 async def exec_polling(
@@ -133,15 +135,37 @@ async def exec_polling(
         await asyncio.sleep(interval)
         proc = await _find_process(sandbox, pid)
         if proc is not None and (proc.status == "completed" or proc.completed_at):
-            exit_code = proc.exit_code if proc.exit_code is not None else 1
+            raw_exit_code = proc.exit_code
+            exit_code = raw_exit_code if raw_exit_code is not None else 1
+            proc_status = proc.status
+            proc_completed_at = proc.completed_at
             break
         if time.monotonic() >= deadline:
             await _safe_kill(sandbox, pid)
             raise SandboxExecTimeout(timeout)
         interval = min(interval * 2, poll_max_interval)
 
-    stdout = await _read_file_or_empty(sandbox, out_path)
-    stderr = await _read_file_or_empty(sandbox, err_path)
+    stdout, stdout_present = await _read_file_or_empty(sandbox, out_path)
+    stderr, stderr_present = await _read_file_or_empty(sandbox, err_path)
+
+    # Diagnostic: if exit_code was None on the koyeb side or the redirect
+    # files never existed, the (exit, stdout, stderr) tuple we surface is
+    # synthetic — log the raw process state so callers can tell a real
+    # non-zero from a "we lost the result" defaulted 1.
+    if raw_exit_code is None or not stdout_present or not stderr_present:
+        logger.warning(
+            "sandbox.exec_polling.unclear_result",
+            extra={
+                "cmd": cmd,
+                "pid": pid,
+                "proc_status": proc_status,
+                "proc_completed_at": proc_completed_at,
+                "raw_exit_code": raw_exit_code,
+                "stdout_present": stdout_present,
+                "stderr_present": stderr_present,
+            },
+        )
+
     return exit_code, stdout, stderr
 
 
