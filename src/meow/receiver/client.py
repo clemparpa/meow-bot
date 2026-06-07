@@ -30,7 +30,14 @@ async def trigger_workflow(
         workflow_identifier=workflow_id,
         execution_id=f"{ctx.event_name}-{ctx.delivery}-{workflow_id}",
         deployment_name=settings.deployment_name,
-        input=input_model.model_dump(mode="json"),
+        # Wrap under `input` to match the JSON schema the worker publishes.
+        # The SDK derives the schema from the entrypoint signature: for
+        # `async def run(self, input: dict)` it requires a top-level `input`
+        # key, and the API rejects flat dumps with a 422 "is a required
+        # property". Workflows that bind the entrypoint to a BaseModel param
+        # would skip this wrapping — see the matching pattern in
+        # tests/e2e/test_health_ping_online.py.
+        input={"input": input_model.model_dump(mode="json")},
     )
     logger.info(
         "webhook.accepted",
