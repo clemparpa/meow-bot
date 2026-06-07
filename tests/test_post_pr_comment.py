@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import cast
 
 from meow.worker.activities import post_pr_comment as ppc_mod
 from meow.worker.activities.post_pr_comment import post_pr_comment
@@ -30,14 +31,10 @@ async def test_post_pr_comment_requests_pull_requests_write(monkeypatch) -> None
             captured["repo"] = repo
             captured["pr_number"] = pr_number
             captured["body"] = body
-            return SimpleNamespace(
-                parsed_data=SimpleNamespace(id=123, html_url="https://gh/c/123")
-            )
+            return SimpleNamespace(parsed_data=SimpleNamespace(id=123, html_url="https://gh/c/123"))
 
         client = SimpleNamespace(
-            rest=SimpleNamespace(
-                issues=SimpleNamespace(async_create_comment=async_create_comment)
-            )
+            rest=SimpleNamespace(issues=SimpleNamespace(async_create_comment=async_create_comment))
         )
         yield SimpleNamespace(client=client)
 
@@ -53,4 +50,4 @@ async def test_post_pr_comment_requests_pull_requests_write(monkeypatch) -> None
     assert captured["owner"] == "owner"
     assert captured["repo"] == "repo"
     assert captured["pr_number"] == 7
-    assert "LGTM" in captured["body"]
+    assert "LGTM" in cast(str, captured["body"])

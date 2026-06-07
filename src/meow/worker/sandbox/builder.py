@@ -466,9 +466,7 @@ class SandboxBuilder:
         # run, so a slow clone never holds a worker thread and stalls another
         # review's sandbox launch.
         try:
-            exit_code, stdout, stderr = await exec_polling(
-                sandbox, cmd, cwd=cwd, timeout=timeout
-            )
+            exit_code, stdout, stderr = await exec_polling(sandbox, cmd, cwd=cwd, timeout=timeout)
         except SandboxExecTimeout as exc:
             raise RuntimeError(f"{fail_msg} (timeout after {exc.timeout}s)") from exc
         if exit_code != 0:

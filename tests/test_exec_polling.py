@@ -9,8 +9,10 @@ overrun as :class:`SandboxExecTimeout` after killing the process.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
+from koyeb import AsyncSandbox
 
 from meow.worker.sandbox.builder import (
     SandboxBuilder,
@@ -26,9 +28,7 @@ def _proc(
     exit_code: int | None = None,
     completed_at: str | None = None,
 ) -> SimpleNamespace:
-    return SimpleNamespace(
-        id=pid, status=status, exit_code=exit_code, completed_at=completed_at
-    )
+    return SimpleNamespace(id=pid, status=status, exit_code=exit_code, completed_at=completed_at)
 
 
 class _FakeFilesystem:
@@ -84,7 +84,7 @@ async def test_exec_polling_returns_exit_code_and_output() -> None:
     )
 
     exit_code, stdout, stderr = await exec_polling(
-        sandbox, "vibe run", cwd="/work/repo", timeout=30
+        cast(AsyncSandbox, sandbox), "vibe run", cwd="/work/repo", timeout=30
     )
 
     assert (exit_code, stdout, stderr) == (0, "review body", "")
@@ -107,7 +107,7 @@ async def test_exec_polling_detects_completion_via_completed_at() -> None:
         contents={"out": "partial", "err": "trace"},
     )
 
-    exit_code, stdout, stderr = await exec_polling(sandbox, "x", timeout=30)
+    exit_code, stdout, stderr = await exec_polling(cast(AsyncSandbox, sandbox), "x", timeout=30)
 
     assert exit_code == 3
     assert stdout == "partial"
@@ -118,7 +118,7 @@ async def test_exec_polling_times_out_and_kills_process() -> None:
     sandbox = _FakeSandbox(statuses=[[_proc(status="running")]])
 
     with pytest.raises(SandboxExecTimeout) as excinfo:
-        await exec_polling(sandbox, "sleep 999", timeout=0)
+        await exec_polling(cast(AsyncSandbox, sandbox), "sleep 999", timeout=0)
 
     assert excinfo.value.timeout == 0
     assert sandbox.killed == ["pid-xyz"]
@@ -131,13 +131,17 @@ async def test_run_raises_on_nonzero_exit() -> None:
     )
 
     with pytest.raises(RuntimeError, match=r"clone failed \(exit=2\).*boom details"):
-        await SandboxBuilder._run(sandbox, "git clone ...", timeout=30, fail_msg="clone failed")
+        await SandboxBuilder._run(
+            cast(AsyncSandbox, sandbox), "git clone ...", timeout=30, fail_msg="clone failed"
+        )
 
 
 async def test_run_raises_on_timeout() -> None:
     sandbox = _FakeSandbox(statuses=[[_proc(status="running")]])
 
     with pytest.raises(RuntimeError, match="prep failed .*timeout after 0s"):
-        await SandboxBuilder._run(sandbox, "x", timeout=0, fail_msg="prep failed")
+        await SandboxBuilder._run(
+            cast(AsyncSandbox, sandbox), "x", timeout=0, fail_msg="prep failed"
+        )
 
     assert sandbox.killed == ["pid-xyz"]
