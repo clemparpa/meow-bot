@@ -56,12 +56,18 @@ async def github_installation_auth(
     settings = Settings()  # ty: ignore[missing-argument]
     pem = settings.load_github_app_private_key()
 
+    # GitHub's `POST /app/installations/.../access_tokens` rejects entries
+    # containing `/` with 422 — it wants bare repo names (`repo`), not
+    # `owner/repo`. Callers naturally have the `owner/repo` form, so we
+    # strip the owner here rather than at every call site.
+    repo_names = [r.split("/", 1)[-1] for r in repositories] if repositories is not None else None
+
     auth = AppInstallationAuthStrategy(
         app_id=settings.github_app_id,
         private_key=pem,
         installation_id=installation_id,
         permissions=permissions if permissions is not None else UNSET,
-        repositories=list(repositories) if repositories is not None else UNSET,
+        repositories=repo_names if repo_names is not None else UNSET,
     )
 
     client = GitHub(auth)
