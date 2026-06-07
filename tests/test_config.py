@@ -17,6 +17,7 @@ _REQUIRED_ENV_VARS = (
     "GITHUB_WEBHOOK_SECRET",
     "MISTRAL_API_KEY",
     "KOYEB_API_TOKEN",
+    "GITHUB_APP_PRIVATE_KEY",
     "GITHUB_APP_PRIVATE_KEY_PATH",
     "DEPLOYMENT_NAME",
     "MEOW_BOT_LOGIN",
@@ -131,3 +132,74 @@ def test_settings_private_key_path_override(monkeypatch: pytest.MonkeyPatch, tmp
     settings = Settings()  # ty: ignore[missing-argument]
 
     assert settings.github_app_private_key_path == "/tmp/custom.pem"
+
+
+def _set_minimal_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Populate the required env vars with throw-away values."""
+
+    monkeypatch.setenv("MEOW_DOMAIN", "meow.example.com")
+    monkeypatch.setenv("GITHUB_APP_ID", "42")
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "s3cr3t")
+    monkeypatch.setenv("MISTRAL_API_KEY", "mk-test")
+    monkeypatch.setenv("KOYEB_API_TOKEN", "kk-test")
+    monkeypatch.setenv("DEPLOYMENT_NAME", "meow-bot-test")
+    monkeypatch.setenv("MEOW_BOT_LOGIN", "meow-bot[bot]")
+
+
+_FAKE_PEM = (
+    "-----BEGIN RSA PRIVATE KEY-----\n"
+    "MIIBOgIBAAJBA...fake-content-for-tests...wIDAQAB\n"
+    "-----END RSA PRIVATE KEY-----\n"
+)
+
+
+def test_load_github_app_private_key_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Inline `GITHUB_APP_PRIVATE_KEY` is returned verbatim — no file read."""
+
+    _clear_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    _set_minimal_env(monkeypatch)
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", _FAKE_PEM)
+    # Point the path at a nonexistent file to prove it isn't touched.
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_PATH", str(tmp_path / "nope.pem"))
+
+    settings = Settings()  # ty: ignore[missing-argument]
+
+    assert settings.load_github_app_private_key() == _FAKE_PEM
+
+
+def test_load_github_app_private_key_from_file(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Without the inline var, the helper falls back to reading the PEM file."""
+
+    _clear_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    _set_minimal_env(monkeypatch)
+
+    pem_path = tmp_path / "github-app.pem"
+    pem_path.write_text(_FAKE_PEM)
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_PATH", str(pem_path))
+
+    settings = Settings()  # ty: ignore[missing-argument]
+
+    assert settings.github_app_private_key is None
+    assert settings.load_github_app_private_key() == _FAKE_PEM
+
+
+def test_load_github_app_private_key_inline_wins_over_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """When both sources are set, the inline env var takes precedence."""
+
+    _clear_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    _set_minimal_env(monkeypatch)
+
+    file_pem = "-----BEGIN RSA PRIVATE KEY-----\nFILE\n-----END RSA PRIVATE KEY-----\n"
+    pem_path = tmp_path / "github-app.pem"
+    pem_path.write_text(file_pem)
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_PATH", str(pem_path))
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", _FAKE_PEM)
+
+    settings = Settings()  # ty: ignore[missing-argument]
+
+    assert settings.load_github_app_private_key() == _FAKE_PEM

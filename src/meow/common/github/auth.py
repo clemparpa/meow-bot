@@ -14,7 +14,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from pathlib import Path
 
 from githubkit import GitHub
 from githubkit.auth import AppInstallationAuthStrategy
@@ -55,7 +54,7 @@ async def github_installation_auth(
     repositories: Sequence[str] | None = None,
 ) -> AsyncIterator[GithubInstallationAuth]:
     settings = Settings()  # ty: ignore[missing-argument]
-    pem = Path(settings.github_app_private_key_path).read_text()
+    pem = settings.load_github_app_private_key()
 
     auth = AppInstallationAuthStrategy(
         app_id=settings.github_app_id,
