@@ -69,7 +69,6 @@ async def test_health_ping_online() -> None:
     # often appends when the value is pasted via the web UI — invisible
     # locally but enough to make `Authorization: Bearer <key>\n` 401.
     api_key = os.environ["MEOW_E2E_MISTRAL_API_KEY"].strip()
-    print(f"[e2e] using Mistral API key of length {len(api_key)}")
     secret = SecretStr(api_key)
     mistral_config.common.mistral_api_key = secret
     mistral_config.temporal.api_key = secret
