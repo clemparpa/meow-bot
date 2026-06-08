@@ -98,11 +98,14 @@ async def test_exec_polling_returns_exit_code_and_output() -> None:
     assert not sandbox.killed
 
 
-async def test_exec_polling_detects_completion_via_completed_at() -> None:
+async def test_exec_polling_keeps_polling_until_exit_code_populated() -> None:
+    # Koyeb has been observed to flip status to "completed" before
+    # exit_code lands — trusting status alone produced a fake exit=1
+    # for successful runs. We now wait for exit_code itself.
     sandbox = _FakeSandbox(
         statuses=[
-            [_proc(status="running")],
-            [_proc(status="running", exit_code=3, completed_at="2026-01-01T00:00:00Z")],
+            [_proc(status="completed", exit_code=None, completed_at=None)],
+            [_proc(status="completed", exit_code=3, completed_at="2026-01-01T00:00:00Z")],
         ],
         contents={"out": "partial", "err": "trace"},
     )
