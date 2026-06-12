@@ -228,7 +228,13 @@ class SandboxBuilder:
         permissions: AppPermissionsType | None = None,
     ) -> Self:
         settings = Settings()  # ty: ignore[missing-argument]
-        self._env["MISTRAL_API_KEY"] = settings.mistral_api_key
+        # The sandbox runs nothing but `vibe`, so the in-sandbox
+        # `MISTRAL_API_KEY` (read by ~/.vibe/config.toml) carries the *inference*
+        # key — the cheaper subscription `MISTRAL_VIBE_API_KEY` when set,
+        # otherwise the standard key. The worker's own `MISTRAL_API_KEY` keeps
+        # its separate role (Mistral Workflows workspace + receiver SDK) and is
+        # never shipped into the sandbox.
+        self._env["MISTRAL_API_KEY"] = settings.vibe_api_key
 
         async def set_gh_token() -> None:
             async with github_installation_auth(

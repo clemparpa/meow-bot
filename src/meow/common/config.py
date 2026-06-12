@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     - ``GITHUB_APP_ID``
     - ``GITHUB_WEBHOOK_SECRET``
     - ``MISTRAL_API_KEY``
+    - ``MISTRAL_VIBE_API_KEY`` — optional. Inference key handed to the
+      ``vibe`` CLI inside the sandbox. Lets a cheaper subscription key
+      drive the reviews while ``MISTRAL_API_KEY`` keeps identifying the
+      Mistral Workflows workspace (worker ↔ deployment) and backing the
+      receiver SDK client. Falls back to ``MISTRAL_API_KEY`` when unset,
+      so existing single-key setups keep working unchanged.
     - ``KOYEB_API_TOKEN``
     - ``GITHUB_APP_PRIVATE_KEY`` — inline PEM content. Takes precedence
       over ``GITHUB_APP_PRIVATE_KEY_PATH`` when both are set. Handy on
@@ -49,6 +55,7 @@ class Settings(BaseSettings):
     github_app_id: str = Field(min_length=1)
     github_webhook_secret: str = Field(min_length=1)
     mistral_api_key: str = Field(min_length=1)
+    mistral_vibe_api_key: str | None = Field(default=None)
     koyeb_api_token: str = Field(min_length=1)
     github_app_private_key: str | None = Field(default=None)
     github_app_private_key_path: str = Field(default="/secrets/github-app.pem", min_length=1)
@@ -60,6 +67,16 @@ class Settings(BaseSettings):
         min_length=1,
         validation_alias="MEOW_BOT_LOGIN",
     )
+
+    @property
+    def vibe_api_key(self) -> str:
+        """Return the inference key for the sandbox ``vibe`` CLI.
+
+        Prefers the dedicated (cheaper, subscription) ``MISTRAL_VIBE_API_KEY``
+        and falls back to ``MISTRAL_API_KEY`` when it is unset, so a single-key
+        deployment keeps working without configuration changes.
+        """
+        return self.mistral_vibe_api_key or self.mistral_api_key
 
     def load_github_app_private_key(self) -> str:
         """Return the GitHub App PEM, preferring the inline env var over the file.
