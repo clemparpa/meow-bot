@@ -67,13 +67,6 @@ class SandboxExecTimeout(RuntimeError):
         self.timeout = timeout
 
 
-async def _find_process(sandbox: AsyncSandbox, pid: str):  # noqa: ANN202 - koyeb ProcessInfo
-    for proc in await sandbox.list_processes():
-        if proc.id == pid:
-            return proc
-    return None
-
-
 async def _safe_kill(sandbox: AsyncSandbox, pid: str) -> None:
     try:
         await sandbox.kill_process(pid)
@@ -108,13 +101,15 @@ async def exec_polling(
 
     A blocking ``sandbox.exec`` is a single long-held HTTP request that
     Koyeb's edge kills with a 504 once it exceeds the gateway timeout. Here
-    we ``launch_process`` and poll ``list_processes`` instead: every HTTP
-    call is short, so neither the event loop nor a thread is held for the
-    duration of the command — concurrent sandbox launches never block.
+    we ``launch_process`` and poll a sentinel file instead: every HTTP call
+    is short, so neither the event loop nor a thread is held for the duration
+    of the command — concurrent sandbox launches never block.
 
-    ``stdout``/``stderr`` are captured via a shell ``exec`` redirect (robust
-    to compound commands, heredocs and subshells, unlike a trailing ``>``)
-    and read back from temp files once the process exits.
+    Completion is detected by a shell-written ``.code`` sentinel file (see the
+    ``trap`` below), not by Koyeb's ``list_processes`` ``exit_code``/``status``
+    fields, which are unreliable. ``stdout``/``stderr`` are captured via a
+    shell ``exec`` redirect (robust to compound commands, heredocs and
+    subshells, unlike a trailing ``>``) and read back once the process exits.
 
     Returns ``(exit_code, stdout, stderr)``. Raises :class:`SandboxExecTimeout`
     if the command has not finished within ``timeout`` seconds (the process
@@ -123,24 +118,38 @@ async def exec_polling(
     run_id = uuid4().hex
     out_path = f"/tmp/meow-{run_id}.out"  # noqa: S108 - sandbox-local scratch
     err_path = f"/tmp/meow-{run_id}.err"  # noqa: S108 - sandbox-local scratch
-    wrapped = f"exec >{shlex.quote(out_path)} 2>{shlex.quote(err_path)}\n{cmd}"
+    code_path = f"/tmp/meow-{run_id}.code"  # noqa: S108 - sandbox-local scratch
+
+    # Capture the exit code ourselves instead of trusting Koyeb's
+    # `list_processes` bookkeeping: that field is racy in both directions —
+    # `status` flips to "completed" before `exit_code` populates, and
+    # `exit_code` is sometimes never backfilled at all, so a finished command
+    # (e.g. `gh auth setup-git`) hangs the poll until the deadline. A shell
+    # `trap ... EXIT` writes the real status to a sentinel file on *any* exit,
+    # including an explicit `exit N` (so `verify_head`'s `exit 1` is captured,
+    # not swallowed). The file's existence is the completion signal.
+    wrapped = (
+        f"trap 'rc=$?; echo \"$rc\" >{shlex.quote(code_path)}' EXIT\n"
+        f"exec >{shlex.quote(out_path)} 2>{shlex.quote(err_path)}\n"
+        f"{cmd}"
+    )
 
     pid = await sandbox.launch_process(wrapped, cwd=cwd)
 
-    # Koyeb can flip `status` to "completed" before `exit_code` and
-    # `completed_at` propagate (observed: status=completed, both fields
-    # null). Trusting `status` alone defaulted exit_code to a fake 1
-    # and made successful `gh auth setup-git` runs look like failures.
-    # Require `exit_code is not None` as the real completion signal —
-    # the deadline still bounds how long we wait.
     deadline = time.monotonic() + timeout
     interval = _POLL_START_INTERVAL
     while True:
         await asyncio.sleep(interval)
-        proc = await _find_process(sandbox, pid)
-        if proc is not None and proc.exit_code is not None:
-            exit_code = proc.exit_code
-            break
+        code_str = (await _read_file_or_empty(sandbox, code_path)).strip()
+        if code_str:
+            try:
+                exit_code = int(code_str)
+                logger.info("sandbox.exec.completed", extra={"exit_code": exit_code})
+                break
+            except ValueError:
+                # Sentinel caught mid-write; treat as not-yet-complete and
+                # re-poll — the next read sees the full line.
+                pass
         if time.monotonic() >= deadline:
             await _safe_kill(sandbox, pid)
             raise SandboxExecTimeout(timeout)
