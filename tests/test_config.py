@@ -16,6 +16,7 @@ _REQUIRED_ENV_VARS = (
     "GITHUB_APP_ID",
     "GITHUB_WEBHOOK_SECRET",
     "MISTRAL_API_KEY",
+    "MISTRAL_VIBE_API_KEY",
     "KOYEB_API_TOKEN",
     "GITHUB_APP_PRIVATE_KEY",
     "GITHUB_APP_PRIVATE_KEY_PATH",
@@ -114,6 +115,35 @@ def test_env_example_rejected_when_copied_as_is(monkeypatch: pytest.MonkeyPatch,
         # rather than the Python attribute name.
         "MEOW_BOT_LOGIN",
     } <= short_fields
+
+
+def test_vibe_api_key_falls_back_to_mistral_api_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Without a dedicated vibe key, the sandbox reuses ``MISTRAL_API_KEY``."""
+    _clear_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    _set_minimal_env(monkeypatch)
+    # MISTRAL_VIBE_API_KEY intentionally unset.
+
+    settings = Settings()  # ty: ignore[missing-argument]
+
+    assert settings.mistral_vibe_api_key is None
+    assert settings.vibe_api_key == "mk-test"
+
+
+def test_vibe_api_key_prefers_dedicated_key(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """A set ``MISTRAL_VIBE_API_KEY`` overrides the standard key for vibe."""
+    _clear_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    _set_minimal_env(monkeypatch)
+    monkeypatch.setenv("MISTRAL_VIBE_API_KEY", "vibe-sub-key")
+
+    settings = Settings()  # ty: ignore[missing-argument]
+
+    # The standard key keeps its workspace/SDK role untouched.
+    assert settings.mistral_api_key == "mk-test"
+    assert settings.vibe_api_key == "vibe-sub-key"
 
 
 def test_settings_private_key_path_override(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
