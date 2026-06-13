@@ -10,6 +10,7 @@ enabled_tools = [
     "bash",
     "skill",
     "task",
+    "write_file",
 ]
 
 enabled_skills = []

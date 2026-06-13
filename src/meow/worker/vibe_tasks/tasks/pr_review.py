@@ -12,15 +12,21 @@ through :func:`meow.worker.vibe_tasks._prompts.render_prompt`.
 from __future__ import annotations
 
 from meow.worker.models import MeowConfig, PrContext, VibeTask
-from meow.worker.sandbox.builder import MEMORY_FILE, WORKING_DIR, pr_ref_name
+from meow.worker.sandbox.builder import (
+    MEMORY_FILE,
+    REVIEW_REPORT_PATH,
+    WORKING_DIR,
+    pr_ref_name,
+)
 from meow.worker.vibe_tasks._prompts import render_prompt
 
 __all__ = ["make_pr_review_task"]
 
 
 # Vibe agent shipped in the sandbox image
-# (sandbox_files/.vibe/agents/issue_commenter.toml). Read-only tool
-# profile: read_file, grep, bash, todo, skill, task — no write_file.
+# (sandbox_files/.vibe/agents/issue_commenter.toml). Tool profile:
+# read_file, grep, bash, todo, skill, task, write_file — the last lets it
+# write its review to REVIEW_REPORT_PATH, which run_vibe reads back.
 _AGENT = "issue_commenter"
 _AGENTS_MD = "AGENTS.md"
 
@@ -51,6 +57,7 @@ def make_pr_review_task(
         head_sha=ctx.head_sha,
         base_sha=ctx.base_sha,
         memory_file=MEMORY_FILE,
+        report_file=REVIEW_REPORT_PATH,
         agents_md=_AGENTS_MD,
     )
     return VibeTask.from_meow_config(prompt=prompt, agent=_AGENT, cfg=cfg)

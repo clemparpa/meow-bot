@@ -39,12 +39,15 @@ from meow.common.logging import get_logger
 
 __all__ = [
     "MEMORY_FILE",
+    "REVIEW_REPORT_FILE",
+    "REVIEW_REPORT_PATH",
     "SandboxBuilder",
     "SandboxBuilderConfig",
     "SandboxExecTimeout",
     "WORKING_DIR",
     "exec_polling",
     "pr_ref_name",
+    "read_file_or_empty",
 ]
 
 logger = get_logger("worker")
@@ -74,12 +77,13 @@ async def _safe_kill(sandbox: AsyncSandbox, pid: str) -> None:
         logger.warning("sandbox.kill_failed", extra={"pid": pid, "error": str(exc)})
 
 
-async def _read_file_or_empty(sandbox: AsyncSandbox, path: str) -> str:
+async def read_file_or_empty(sandbox: AsyncSandbox, path: str) -> str:
     """Read a sandbox file, returning ``""`` if it is missing.
 
     The output files may be absent if the process died before the shell's
     ``exec`` redirect created them — treat that as no output rather than
-    failing the whole run.
+    failing the whole run. Shared with ``run_vibe``, which reuses it to read
+    the agent's ``meow-review.md`` report back out of the sandbox.
     """
     try:
         info = await sandbox.filesystem.read_file(path)
@@ -140,7 +144,7 @@ async def exec_polling(
     interval = _POLL_START_INTERVAL
     while True:
         await asyncio.sleep(interval)
-        code_str = (await _read_file_or_empty(sandbox, code_path)).strip()
+        code_str = (await read_file_or_empty(sandbox, code_path)).strip()
         if code_str:
             try:
                 exit_code = int(code_str)
@@ -155,8 +159,8 @@ async def exec_polling(
             raise SandboxExecTimeout(timeout)
         interval = min(interval * 2, poll_max_interval)
 
-    stdout = await _read_file_or_empty(sandbox, out_path)
-    stderr = await _read_file_or_empty(sandbox, err_path)
+    stdout = await read_file_or_empty(sandbox, out_path)
+    stderr = await read_file_or_empty(sandbox, err_path)
     return exit_code, stdout, stderr
 
 
@@ -168,6 +172,14 @@ WORKING_DIR = "/work/repo"
 # Default scratchpad with_memory writes at the repo root. Factories that
 # mention the file in their prompt import this so the path stays in sync.
 MEMORY_FILE = "meow-bot-memory.md"
+
+# Where the review agent writes its final markdown report. The prompt tells
+# the agent to write here (via its write_file tool) and run_vibe reads it
+# back instead of scraping vibe's stdout transcript — both sides import these
+# so the path can't drift. Lives at the repo root and is git-ignored
+# (with_memory) so it never looks like part of the PR.
+REVIEW_REPORT_FILE = "meow-review.md"
+REVIEW_REPORT_PATH = f"{WORKING_DIR}/{REVIEW_REPORT_FILE}"
 
 
 def pr_ref_name(pr_number: int) -> str:
@@ -379,9 +391,12 @@ class SandboxBuilder:
         SHAs come from the webhook payload and are interpolated directly. The
         file is git-ignored locally (via ``.git/info/exclude``) so it never
         shows up in the agent's ``git status`` / ``git diff`` and can't be
-        mistaken for part of the PR.
+        mistaken for part of the PR. The review report (``meow-review.md``,
+        written later by the agent) is git-ignored here too, for the same
+        reason — excluding the path before the file exists is harmless.
         """
         fname_q = shlex.quote(filename)
+        report_q = shlex.quote(REVIEW_REPORT_FILE)
 
         body = (
             f"# meow-bot memory\n\n"
@@ -396,9 +411,9 @@ class SandboxBuilder:
         # Single-quote the heredoc delimiter so the shell does no expansion:
         # the body is literal, nothing inside gets interpreted.
         write_cmd = f"cat > {fname_q} <<'MEOW_EOF'\n{body}MEOW_EOF"
-        exclude_cmd = (
-            f"grep -qxF {fname_q} .git/info/exclude 2>/dev/null "
-            f"|| echo {fname_q} >> .git/info/exclude"
+        exclude_cmd = "\n".join(
+            f"grep -qxF {q} .git/info/exclude 2>/dev/null || echo {q} >> .git/info/exclude"
+            for q in (fname_q, report_q)
         )
 
         checkout_timeout = self._config.checkout_timeout
