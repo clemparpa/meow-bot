@@ -24,8 +24,13 @@ Read surrounding code with your `read_file` / `grep` tools when context
 is missing. If `$agents_md` exists at the repo root, treat its
 conventions as authoritative.
 
-Output one markdown report in the chat covering: correctness bugs, security issues,
-and clarity problems. Skip nits and style preferences. Be concise —
-focus on the highest-signal findings, not exhaustive coverage. 
-Always write the report in the language of the description of the PR, default english if no description nor title.
-your last message should only contain the markdown report.
+Write your final review as one markdown report to the file `$report_file`
+using your `write_file` tool, in a single call. The report must cover:
+correctness bugs, security issues, and clarity problems. Skip nits and style
+preferences. Be concise — focus on the highest-signal findings, not
+exhaustive coverage. Always write the report in the language of the PR
+description, default english if no description nor title.
+
+`$report_file` is the ONLY deliverable: write the complete report there.
+Do NOT print the report in the chat — chat output is discarded and never
+seen. Writing the file is the last thing you do.

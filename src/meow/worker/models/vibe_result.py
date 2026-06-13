@@ -17,13 +17,14 @@ __all__ = ["VibeResult"]
 class VibeResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    # Vibe's stdout, trimmed. ``None`` whenever the run did not exit
-    # cleanly — the partial output is rarely meaningful and the action
-    # layer should react to ``terminated_early`` instead of parsing
-    # whatever fragment landed.
+    # The agent's review report (contents of ``meow-review.md``), trimmed.
+    # ``None`` when the agent never wrote the file — the action layer reacts
+    # to ``terminated_early`` rather than inventing a body.
     body: str | None
-    # Set on any non-zero exit (planned budget cap, hard crash, etc.).
-    # Action activities use this to decide whether to post or short-circuit.
+    # Set whenever the run did not produce a clean, complete report: any
+    # non-zero exit (planned budget cap, hard crash, …) OR a clean exit that
+    # left no report file. Action activities use this to decide whether to
+    # post as-is or prepend a warning banner.
     terminated_early: bool
     # Vibe's stderr, trimmed. ``None`` when empty. Carries the
     # ``<vibe_stop_event>`` payload on budget caps and the exception
@@ -31,20 +32,27 @@ class VibeResult(BaseModel):
     stop_reason: str | None
 
     @classmethod
-    def from_exec(cls, *, exit_code: int, stdout: str, stderr: str) -> Self:
-        """Build a result from one ``sandbox.exec()`` outcome.
+    def from_exec(cls, *, exit_code: int, report: str, stderr: str) -> Self:
+        """Build a result from one vibe run.
 
-        Non-zero exit ⇒ ``terminated_early``: planned cap (turn/price)
-        and hard crash both end the run before stdout is meaningful.
-        ``stderr`` is forwarded verbatim as ``stop_reason`` — it carries
-        either the ``<vibe_stop_event>`` payload on a cap or the
-        exception trace on a crash; we don't try to split the two.
+        ``report`` is the contents of the agent's ``meow-review.md`` (read
+        back by the runner), not vibe's stdout — the stdout transcript is
+        diagnostic only. Four cases collapse onto three render paths in
+        :func:`post_pr_comment._build_body`:
+
+        - clean exit + report present ⇒ the review, posted as-is.
+        - clean exit + no report ⇒ ``terminated_early`` with an explanatory
+          ``stop_reason`` (the agent finished but produced nothing to post).
+        - non-zero exit + report present ⇒ the partial review is still posted,
+          flagged ``terminated_early`` with ``stderr`` as the reason (the agent
+          wrote its report, then a cap/crash cut it short).
+        - non-zero exit + no report ⇒ banner + ``stderr`` only.
         """
-        if exit_code == 0:
-            body = stdout.strip()
+        body = report.strip() or None
+        if exit_code == 0 and body is not None:
             return cls(body=body, terminated_early=False, stop_reason=None)
-        return cls(
-            body=None,
-            terminated_early=True,
-            stop_reason=stderr.strip() or None,
-        )
+        if exit_code != 0:
+            stop_reason = stderr.strip() or None
+        else:
+            stop_reason = "vibe exited 0 but wrote no meow-review.md"
+        return cls(body=body, terminated_early=True, stop_reason=stop_reason)

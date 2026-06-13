@@ -21,16 +21,21 @@ from datetime import timedelta
 
 import mistralai.workflows as workflows
 
+from meow.common.logging import get_logger
 from meow.worker.models import PrSandboxSpec, VibeResult, VibeTask
 from meow.worker.sandbox.builder import (
+    REVIEW_REPORT_PATH,
     WORKING_DIR,
     SandboxBuilder,
     SandboxBuilderConfig,
     SandboxExecTimeout,
     exec_polling,
+    read_file_or_empty,
 )
 
 __all__ = ["run_vibe"]
+
+logger = get_logger("worker")
 
 # Activity covers clone + checkout + pr_diff + memory + vibe + cleanup.
 _ACTIVITY_TIMEOUT = timedelta(minutes=15)
@@ -107,9 +112,22 @@ async def run_vibe(task: VibeTask, sandbox_spec: PrSandboxSpec) -> VibeResult:
                     terminated_early=True,
                     stop_reason=f"vibe exceeded {exc.timeout}s budget",
                 )
+            # The deliverable is the agent's report file, not the stdout
+            # transcript (which is its full thinking/monologue). Read it back
+            # while the sandbox is still alive; from_exec falls back to a
+            # terminated-early banner when it's missing.
+            report = await read_file_or_empty(sandbox, REVIEW_REPORT_PATH)
+            logger.info(
+                "run_vibe.completed",
+                extra={
+                    "exit_code": exit_code,
+                    "report_bytes": len(report),
+                    "stdout_bytes": len(stdout),
+                },
+            )
             return VibeResult.from_exec(
                 exit_code=exit_code,
-                stdout=stdout,
+                report=report,
                 stderr=stderr,
             )
     finally:
