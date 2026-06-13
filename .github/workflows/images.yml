@@ -49,3 +49,72 @@ jobs:
           # Scope per target so matrix jobs don't clobber each other's cache.
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+
+  # Once the fresh images are on Docker Hub, roll the matching Koyeb services so
+  # they re-pull the new :latest. We only redeploy the service whose code
+  # actually changed — shared inputs (Dockerfile, deps, common/) rebuild both
+  # images and so redeploy both. A manual run (workflow_dispatch) has no diff
+  # base, so it redeploys everything. Skipped entirely if either build failed.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # paths-filter diffs HEAD against its parent on push events.
+          fetch-depth: 2
+
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            shared: &shared
+              - "Dockerfile"
+              - "pyproject.toml"
+              - "uv.lock"
+              - "src/meow/__init__.py"
+              - "src/meow/py.typed"
+              - "src/meow/common/**"
+              - ".github/workflows/images.yml"
+            receiver:
+              - *shared
+              - "src/meow/receiver/**"
+            worker:
+              - *shared
+              - "src/meow/worker/**"
+              # Sandbox build inputs ship as their own image (sandbox-image.yml) —
+              # exclude only those, NOT the worker's runtime sandbox code
+              # (builder.py, __init__.py). Mirrors the build job's trigger paths.
+              - "!src/meow/worker/sandbox/Dockerfile"
+              - "!src/meow/worker/sandbox/sandbox_files/**"
+
+      - name: Install Koyeb CLI
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outputs.receiver == 'true' ||
+          steps.changes.outputs.worker == 'true'
+        env:
+          # Pinned for reproducible CI — install.sh always grabs latest, so we
+          # fetch the release asset directly instead.
+          KOYEB_CLI_VERSION: "5.10.2"
+        run: |
+          curl -fsSL "https://github.com/koyeb/koyeb-cli/releases/download/v${KOYEB_CLI_VERSION}/koyeb-cli_${KOYEB_CLI_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin koyeb
+          koyeb version
+
+      - name: Redeploy receiver
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outputs.receiver == 'true'
+        env:
+          # The CLI reads the token from KOYEB_TOKEN (viper AutomaticEnv, prefix KOYEB).
+          KOYEB_TOKEN: ${{ secrets.KOYEB_CLI_TOKEN }}
+        run: koyeb service redeploy "${{ secrets.KOYEB_APP }}/meow-receiver" --wait --wait-timeout=3m
+
+      - name: Redeploy worker
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          steps.changes.outputs.worker == 'true'
+        env:
+          KOYEB_TOKEN: ${{ secrets.KOYEB_CLI_TOKEN }}
+        run: koyeb service redeploy "${{ secrets.KOYEB_APP }}/meow-worker" --wait --wait-timeout=3m
