@@ -35,6 +35,13 @@ class VibeTask(BaseModel):
     max_turns: int = Field(default=80, ge=1)
     max_price_usd: float = Field(default=0.50, gt=0)
 
+    # Sandbox path of the file the agent writes as its deliverable; run_vibe
+    # reads it back after the run. The prompt must tell the agent to write here.
+    # ``None`` means the task produces no file deliverable (e.g. it only pushes
+    # a branch) — run_vibe then captures no body and the action layer reacts to
+    # ``terminated_early`` rather than inventing one.
+    report_path: str | None = Field(default=None, min_length=1)
+
     @classmethod
     def from_meow_config(
         cls,
@@ -42,6 +49,7 @@ class VibeTask(BaseModel):
         prompt: str,
         agent: str | None,
         cfg: MeowConfig,
+        report_path: str | None = None,
     ) -> Self:
         """Build a task whose budgets come from the repo's ``.meow.yml``."""
         return cls(
@@ -49,6 +57,7 @@ class VibeTask(BaseModel):
             agent=agent,
             max_turns=cfg.max_turns,
             max_price_usd=cfg.max_price_usd,
+            report_path=report_path,
         )
 
     def build_command(self) -> str:

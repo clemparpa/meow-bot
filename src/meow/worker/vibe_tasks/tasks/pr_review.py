@@ -14,7 +14,7 @@ from __future__ import annotations
 from meow.worker.models import MeowConfig, PrContext, VibeTask
 from meow.worker.sandbox.builder import (
     MEMORY_FILE,
-    REVIEW_REPORT_PATH,
+    REPORT_PATH,
     WORKING_DIR,
     pr_ref_name,
 )
@@ -26,7 +26,7 @@ __all__ = ["make_pr_review_task"]
 # Vibe agent shipped in the sandbox image
 # (sandbox_files/.vibe/agents/issue_commenter.toml). Tool profile:
 # read_file, grep, bash, todo, skill, task, write_file — the last lets it
-# write its review to REVIEW_REPORT_PATH, which run_vibe reads back.
+# write its review to REPORT_PATH, which run_vibe reads back.
 _AGENT = "issue_commenter"
 _AGENTS_MD = "AGENTS.md"
 
@@ -57,7 +57,7 @@ def make_pr_review_task(
         head_sha=ctx.head_sha,
         base_sha=ctx.base_sha,
         memory_file=MEMORY_FILE,
-        report_file=REVIEW_REPORT_PATH,
+        report_file=REPORT_PATH,
         agents_md=_AGENTS_MD,
     )
-    return VibeTask.from_meow_config(prompt=prompt, agent=_AGENT, cfg=cfg)
+    return VibeTask.from_meow_config(prompt=prompt, agent=_AGENT, cfg=cfg, report_path=REPORT_PATH)

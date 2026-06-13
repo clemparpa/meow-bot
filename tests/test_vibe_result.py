@@ -1,9 +1,9 @@
 """Unit tests for :meth:`VibeResult.from_exec`.
 
-``from_exec`` turns one vibe run — its exit code, the ``meow-review.md``
-report the agent wrote, and stderr — into the result the action layer posts.
-The body now comes from the *report file*, never from vibe's stdout
-transcript, so these cover the four (exit_code × report-present) cases.
+``from_exec`` turns one vibe run — its exit code, the report file the agent
+wrote, and stderr — into the result the action layer posts. The body now comes
+from the *report file*, never from vibe's stdout transcript, so these cover the
+four (exit_code × report-present) cases.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def test_clean_exit_without_report_is_terminated_early() -> None:
 
     assert result.body is None
     assert result.terminated_early is True
-    assert result.stop_reason == "vibe exited 0 but wrote no meow-review.md"
+    assert result.stop_reason == "vibe exited 0 but wrote no report file"
 
 
 def test_nonzero_exit_with_report_keeps_partial_and_flags_early() -> None:

@@ -39,8 +39,8 @@ from meow.common.logging import get_logger
 
 __all__ = [
     "MEMORY_FILE",
-    "REVIEW_REPORT_FILE",
-    "REVIEW_REPORT_PATH",
+    "REPORT_FILE",
+    "REPORT_PATH",
     "SandboxBuilder",
     "SandboxBuilderConfig",
     "SandboxExecTimeout",
@@ -83,7 +83,7 @@ async def read_file_or_empty(sandbox: AsyncSandbox, path: str) -> str:
     The output files may be absent if the process died before the shell's
     ``exec`` redirect created them — treat that as no output rather than
     failing the whole run. Shared with ``run_vibe``, which reuses it to read
-    the agent's ``meow-review.md`` report back out of the sandbox.
+    the agent's output report file back out of the sandbox.
     """
     try:
         info = await sandbox.filesystem.read_file(path)
@@ -173,13 +173,14 @@ WORKING_DIR = "/work/repo"
 # mention the file in their prompt import this so the path stays in sync.
 MEMORY_FILE = "meow-bot-memory.md"
 
-# Where the review agent writes its final markdown report. The prompt tells
-# the agent to write here (via its write_file tool) and run_vibe reads it
-# back instead of scraping vibe's stdout transcript — both sides import these
-# so the path can't drift. Lives at the repo root and is git-ignored
-# (with_memory) so it never looks like part of the PR.
-REVIEW_REPORT_FILE = "meow-review.md"
-REVIEW_REPORT_PATH = f"{WORKING_DIR}/{REVIEW_REPORT_FILE}"
+# Default file an agent writes its final markdown deliverable to. The prompt
+# tells the agent to write here (via its write_file tool) and run_vibe reads it
+# back instead of scraping vibe's stdout transcript. The path a given task
+# expects lives on its VibeTask.report_path; this is just the default the
+# factories wire in. Lives at the repo root and is git-ignored (with_memory)
+# so it never looks like part of the PR.
+REPORT_FILE = "meow-output.md"
+REPORT_PATH = f"{WORKING_DIR}/{REPORT_FILE}"
 
 
 def pr_ref_name(pr_number: int) -> str:
@@ -385,18 +386,19 @@ class SandboxBuilder:
         head_sha: str,
         repo_full_name: str,
         filename: str = MEMORY_FILE,
+        report_filename: str = REPORT_FILE,
     ) -> Self:
         """Drop a memory file at the repo root for the agent to consult.
 
         SHAs come from the webhook payload and are interpolated directly. The
         file is git-ignored locally (via ``.git/info/exclude``) so it never
         shows up in the agent's ``git status`` / ``git diff`` and can't be
-        mistaken for part of the PR. The review report (``meow-review.md``,
+        mistaken for part of the PR. The agent's report file (``report_filename``,
         written later by the agent) is git-ignored here too, for the same
         reason — excluding the path before the file exists is harmless.
         """
         fname_q = shlex.quote(filename)
-        report_q = shlex.quote(REVIEW_REPORT_FILE)
+        report_q = shlex.quote(report_filename)
 
         body = (
             f"# meow-bot memory\n\n"

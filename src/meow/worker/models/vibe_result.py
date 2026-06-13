@@ -17,7 +17,7 @@ __all__ = ["VibeResult"]
 class VibeResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    # The agent's review report (contents of ``meow-review.md``), trimmed.
+    # The agent's output report (contents of the task's report file), trimmed.
     # ``None`` when the agent never wrote the file — the action layer reacts
     # to ``terminated_early`` rather than inventing a body.
     body: str | None
@@ -35,15 +35,15 @@ class VibeResult(BaseModel):
     def from_exec(cls, *, exit_code: int, report: str, stderr: str) -> Self:
         """Build a result from one vibe run.
 
-        ``report`` is the contents of the agent's ``meow-review.md`` (read
-        back by the runner), not vibe's stdout — the stdout transcript is
-        diagnostic only. Four cases collapse onto three render paths in
-        :func:`post_pr_comment._build_body`:
+        ``report`` is the contents of the agent's report file (read back by the
+        runner from the task's ``report_path``), not vibe's stdout — the stdout
+        transcript is diagnostic only. Four cases collapse onto three render
+        paths in :func:`post_pr_comment._build_body`:
 
-        - clean exit + report present ⇒ the review, posted as-is.
+        - clean exit + report present ⇒ the report, posted as-is.
         - clean exit + no report ⇒ ``terminated_early`` with an explanatory
           ``stop_reason`` (the agent finished but produced nothing to post).
-        - non-zero exit + report present ⇒ the partial review is still posted,
+        - non-zero exit + report present ⇒ the partial report is still posted,
           flagged ``terminated_early`` with ``stderr`` as the reason (the agent
           wrote its report, then a cap/crash cut it short).
         - non-zero exit + no report ⇒ banner + ``stderr`` only.
@@ -54,5 +54,5 @@ class VibeResult(BaseModel):
         if exit_code != 0:
             stop_reason = stderr.strip() or None
         else:
-            stop_reason = "vibe exited 0 but wrote no meow-review.md"
+            stop_reason = "vibe exited 0 but wrote no report file"
         return cls(body=body, terminated_early=True, stop_reason=stop_reason)
