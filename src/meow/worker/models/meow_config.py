@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 
 
 class MeowConfig(BaseModel):
-    """Parsed ``.meow.yml`` — repo-level configuration for the bot (SPEC §10).
+    """Parsed ``.meow.json`` — repo-level configuration for the bot (SPEC §10).
 
     All fields have spec-defined defaults so an unconfigured repo gets a
     sensible review. ``model`` drives the vibe call; ``max_turns`` /
