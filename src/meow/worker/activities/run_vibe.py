@@ -24,7 +24,6 @@ import mistralai.workflows as workflows
 from meow.common.logging import get_logger
 from meow.worker.models import PrSandboxSpec, VibeResult, VibeTask
 from meow.worker.sandbox.builder import (
-    REVIEW_REPORT_PATH,
     WORKING_DIR,
     SandboxBuilder,
     SandboxBuilderConfig,
@@ -112,11 +111,16 @@ async def run_vibe(task: VibeTask, sandbox_spec: PrSandboxSpec) -> VibeResult:
                     terminated_early=True,
                     stop_reason=f"vibe exceeded {exc.timeout}s budget",
                 )
-            # The deliverable is the agent's report file, not the stdout
-            # transcript (which is its full thinking/monologue). Read it back
-            # while the sandbox is still alive; from_exec falls back to a
-            # terminated-early banner when it's missing.
-            report = await read_file_or_empty(sandbox, REVIEW_REPORT_PATH)
+            # The deliverable is the agent's report file (declared by the
+            # task), not the stdout transcript (its full thinking/monologue).
+            # Read it back while the sandbox is still alive; from_exec falls
+            # back to a terminated-early banner when it's missing. Tasks with
+            # no file deliverable leave report_path None — nothing to read.
+            report = (
+                await read_file_or_empty(sandbox, task.report_path)
+                if task.report_path is not None
+                else ""
+            )
             logger.info(
                 "run_vibe.completed",
                 extra={
