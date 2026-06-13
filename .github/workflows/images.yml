@@ -75,23 +75,32 @@ jobs:
               - "src/meow/__init__.py"
               - "src/meow/py.typed"
               - "src/meow/common/**"
+              - ".github/workflows/images.yml"
             receiver:
               - *shared
               - "src/meow/receiver/**"
             worker:
               - *shared
               - "src/meow/worker/**"
-              # Sandbox build inputs ship as their own image (sandbox-image.yml).
-              - "!src/meow/worker/sandbox/**"
+              # Sandbox build inputs ship as their own image (sandbox-image.yml) —
+              # exclude only those, NOT the worker's runtime sandbox code
+              # (builder.py, __init__.py). Mirrors the build job's trigger paths.
+              - "!src/meow/worker/sandbox/Dockerfile"
+              - "!src/meow/worker/sandbox/sandbox_files/**"
 
       - name: Install Koyeb CLI
         if: >-
           github.event_name == 'workflow_dispatch' ||
           steps.changes.outputs.receiver == 'true' ||
           steps.changes.outputs.worker == 'true'
+        env:
+          # Pinned for reproducible CI — install.sh always grabs latest, so we
+          # fetch the release asset directly instead.
+          KOYEB_CLI_VERSION: "5.10.2"
         run: |
-          curl -fsSL https://raw.githubusercontent.com/koyeb/koyeb-cli/master/install.sh | sh
-          echo "$HOME/.koyeb/bin" >> "$GITHUB_PATH"
+          curl -fsSL "https://github.com/koyeb/koyeb-cli/releases/download/v${KOYEB_CLI_VERSION}/koyeb-cli_${KOYEB_CLI_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin koyeb
+          koyeb version
 
       - name: Redeploy receiver
         if: >-
