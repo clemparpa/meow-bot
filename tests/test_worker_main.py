@@ -57,12 +57,14 @@ def test_main_starts_worker(caplog: pytest.LogCaptureFixture) -> None:
 
     run_worker.assert_awaited_once_with(worker_main._WORKFLOWS)
     liveness.assert_called_once_with(worker_main._DEFAULT_LIVENESS_PORT)
-    assert len(worker_main._WORKFLOWS) == 1
-    assert worker_main._WORKFLOWS[0] is worker_main.PrReviewWorkflow
+    assert [
+        worker_main.PrReviewWorkflow,
+        worker_main.FeatureScopeWorkflow,
+    ] == worker_main._WORKFLOWS
 
     started: list[Any] = [r for r in caplog.records if r.message == "worker.started"]
     assert len(started) == 1
-    assert started[0].workflows == ["PrReviewWorkflow"]
+    assert started[0].workflows == ["PrReviewWorkflow", "FeatureScopeWorkflow"]
 
 
 def test_main_uses_liveness_port_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

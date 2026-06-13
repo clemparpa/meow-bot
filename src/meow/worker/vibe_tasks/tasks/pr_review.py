@@ -26,7 +26,7 @@ __all__ = ["make_pr_review_task"]
 # Vibe agent shipped in the sandbox image
 # (sandbox_files/.vibe/agents/issue_commenter.toml). Tool profile:
 # read_file, grep, bash, todo, skill, task, write_file — the last lets it
-# write its review to REPORT_PATH, which run_vibe reads back.
+# write its review to REPORT_PATH, which run_pr_review_vibe reads back.
 _AGENT = "issue_commenter"
 _AGENTS_MD = "AGENTS.md"
 

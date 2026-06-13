@@ -45,7 +45,7 @@ async def fetch_meow_config(
 
 
 @workflows.activity(start_to_close_timeout=timedelta(seconds=5))
-async def run_vibe(task: VibeTask, sandbox_spec: PrSandboxSpec) -> VibeResult:
+async def run_pr_review_vibe(task: VibeTask, sandbox_spec: PrSandboxSpec) -> VibeResult:
     return VibeResult(
         body="Fake review report.",
         terminated_early=False,

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from tests.integration.cases._models import ExpectedDispatch, WebhookCase
 from tests.integration.cases.issue_comment import ISSUE_COMMENT_CASES
+from tests.integration.cases.issues import ISSUES_CASES
 from tests.integration.cases.transport import TRANSPORT_CASES
 
-ALL_CASES: list[WebhookCase] = [*TRANSPORT_CASES, *ISSUE_COMMENT_CASES]
+ALL_CASES: list[WebhookCase] = [*TRANSPORT_CASES, *ISSUE_COMMENT_CASES, *ISSUES_CASES]
 
 __all__ = ["ALL_CASES", "ExpectedDispatch", "WebhookCase"]

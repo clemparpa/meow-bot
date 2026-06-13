@@ -212,3 +212,156 @@ def issue_comment_body(**kwargs: Any) -> bytes:
     """Same payload, JSON-encoded for the receiver tests."""
 
     return json.dumps(issue_comment_payload(**kwargs)).encode("utf-8")
+
+
+def _label(name: str) -> dict[str, Any]:
+    return {
+        "id": abs(hash(name)) % 1_000_000,
+        "node_id": "LA_kwDOABCD",
+        "url": f"https://api.github.com/repos/octocat/hello/labels/{name}",
+        "name": name,
+        "color": "ededed",
+        "default": False,
+        "description": None,
+    }
+
+
+def issues_payload(
+    *,
+    action: str = "opened",
+    sender_login: str = "alice",
+    title: str = "Add a dark mode",
+    body: str | None = "It would be nice to have a dark mode.",
+    labels: list[str] | None = None,
+    added_label: str | None = None,
+) -> dict[str, Any]:
+    """Build an ``issues`` webhook payload as a Python dict.
+
+    ``labels`` are the names on the issue (peuplés sur ``opened``).
+    ``added_label`` populates the top-level ``label`` field GitHub sends on
+    the ``labeled`` action (the single label just added).
+    """
+    label_names = labels or []
+    sender = _simple_user(sender_login, user_id=42)
+    issue_user = {"id": 42, "login": sender_login}
+    issue: dict[str, Any] = {
+        "active_lock_reason": None,
+        "assignee": None,
+        "assignees": [],
+        "author_association": "NONE",
+        "body": body,
+        "closed_at": None,
+        "comments": 0,
+        "comments_url": "https://api.github.com/repos/octocat/hello/issues/7/comments",
+        "created_at": "2024-01-01T00:00:00Z",
+        "events_url": "https://api.github.com/repos/octocat/hello/issues/7/events",
+        "html_url": "https://github.com/octocat/hello/issues/7",
+        "id": 700,
+        "labels": [_label(n) for n in label_names],
+        "labels_url": "https://api.github.com/repos/octocat/hello/issues/7/labels{/name}",
+        "locked": False,
+        "milestone": None,
+        "node_id": "I_kwDOABCE",
+        "number": 7,
+        "reactions": _reactions(),
+        "repository_url": "https://api.github.com/repos/octocat/hello",
+        "state": "open",
+        "title": title,
+        "updated_at": "2024-01-01T00:00:00Z",
+        "url": "https://api.github.com/repos/octocat/hello/issues/7",
+        "user": issue_user,
+    }
+
+    payload: dict[str, Any] = {
+        "action": action,
+        "installation": {
+            "id": 99,
+            "node_id": "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uOTk=",
+        },
+        "issue": issue,
+        "repository": _repository(),
+        "sender": sender,
+    }
+    if added_label is not None:
+        payload["label"] = _label(added_label)
+    return payload
+
+
+def _repository() -> dict[str, Any]:
+    """The shared repository block (carries ``default_branch: main``)."""
+    owner = _simple_user("octocat", user_id=2)
+    return {
+        "id": 10,
+        "node_id": "R_kgDOABCD",
+        "name": "hello",
+        "full_name": "octocat/hello",
+        "license": None,
+        "forks": 0,
+        "owner": owner,
+        "private": False,
+        "html_url": "https://github.com/octocat/hello",
+        "description": None,
+        "fork": False,
+        "url": "https://api.github.com/repos/octocat/hello",
+        "archive_url": "https://api.github.com/repos/octocat/hello/{archive_format}{/ref}",
+        "assignees_url": "https://api.github.com/repos/octocat/hello/assignees{/user}",
+        "blobs_url": "https://api.github.com/repos/octocat/hello/git/blobs{/sha}",
+        "branches_url": "https://api.github.com/repos/octocat/hello/branches{/branch}",
+        "collaborators_url": "https://api.github.com/repos/octocat/hello/collaborators{/collaborator}",
+        "comments_url": "https://api.github.com/repos/octocat/hello/comments{/number}",
+        "commits_url": "https://api.github.com/repos/octocat/hello/commits{/sha}",
+        "compare_url": "https://api.github.com/repos/octocat/hello/compare/{base}...{head}",
+        "contents_url": "https://api.github.com/repos/octocat/hello/contents/{+path}",
+        "contributors_url": "https://api.github.com/repos/octocat/hello/contributors",
+        "deployments_url": "https://api.github.com/repos/octocat/hello/deployments",
+        "downloads_url": "https://api.github.com/repos/octocat/hello/downloads",
+        "events_url": "https://api.github.com/repos/octocat/hello/events",
+        "forks_url": "https://api.github.com/repos/octocat/hello/forks",
+        "git_commits_url": "https://api.github.com/repos/octocat/hello/git/commits{/sha}",
+        "git_refs_url": "https://api.github.com/repos/octocat/hello/git/refs{/sha}",
+        "git_tags_url": "https://api.github.com/repos/octocat/hello/git/tags{/sha}",
+        "git_url": "git://github.com/octocat/hello.git",
+        "issue_comment_url": "https://api.github.com/repos/octocat/hello/issues/comments{/number}",
+        "issue_events_url": "https://api.github.com/repos/octocat/hello/issues/events{/number}",
+        "issues_url": "https://api.github.com/repos/octocat/hello/issues{/number}",
+        "keys_url": "https://api.github.com/repos/octocat/hello/keys{/key_id}",
+        "labels_url": "https://api.github.com/repos/octocat/hello/labels{/name}",
+        "languages_url": "https://api.github.com/repos/octocat/hello/languages",
+        "merges_url": "https://api.github.com/repos/octocat/hello/merges",
+        "milestones_url": "https://api.github.com/repos/octocat/hello/milestones{/number}",
+        "notifications_url": "https://api.github.com/repos/octocat/hello/notifications{?since,all,participating}",
+        "pulls_url": "https://api.github.com/repos/octocat/hello/pulls{/number}",
+        "releases_url": "https://api.github.com/repos/octocat/hello/releases{/id}",
+        "ssh_url": "git@github.com:octocat/hello.git",
+        "stargazers_url": "https://api.github.com/repos/octocat/hello/stargazers",
+        "statuses_url": "https://api.github.com/repos/octocat/hello/statuses/{sha}",
+        "subscribers_url": "https://api.github.com/repos/octocat/hello/subscribers",
+        "subscription_url": "https://api.github.com/repos/octocat/hello/subscription",
+        "tags_url": "https://api.github.com/repos/octocat/hello/tags",
+        "teams_url": "https://api.github.com/repos/octocat/hello/teams",
+        "trees_url": "https://api.github.com/repos/octocat/hello/git/trees{/sha}",
+        "clone_url": "https://github.com/octocat/hello.git",
+        "mirror_url": None,
+        "hooks_url": "https://api.github.com/repos/octocat/hello/hooks",
+        "svn_url": "https://github.com/octocat/hello",
+        "homepage": None,
+        "language": None,
+        "forks_count": 0,
+        "stargazers_count": 0,
+        "watchers_count": 0,
+        "size": 0,
+        "default_branch": "main",
+        "open_issues_count": 0,
+        "has_issues": True,
+        "has_projects": True,
+        "has_wiki": True,
+        "has_pages": False,
+        "has_downloads": True,
+        "archived": False,
+        "disabled": False,
+        "pushed_at": "2024-01-01T00:00:00Z",
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-01T00:00:00Z",
+        "open_issues": 0,
+        "watchers": 0,
+    }

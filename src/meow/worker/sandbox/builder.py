@@ -386,19 +386,17 @@ class SandboxBuilder:
         head_sha: str,
         repo_full_name: str,
         filename: str = MEMORY_FILE,
-        report_filename: str = REPORT_FILE,
     ) -> Self:
         """Drop a memory file at the repo root for the agent to consult.
 
         SHAs come from the webhook payload and are interpolated directly. The
         file is git-ignored locally (via ``.git/info/exclude``) so it never
         shows up in the agent's ``git status`` / ``git diff`` and can't be
-        mistaken for part of the PR. The agent's report file (``report_filename``,
-        written later by the agent) is git-ignored here too, for the same
-        reason — excluding the path before the file exists is harmless.
+        mistaken for part of the PR. The report file is a separate concern —
+        :py:meth:`with_report` git-ignores it — so a use case can have one
+        without the other.
         """
         fname_q = shlex.quote(filename)
-        report_q = shlex.quote(report_filename)
 
         body = (
             f"# meow-bot memory\n\n"
@@ -413,10 +411,7 @@ class SandboxBuilder:
         # Single-quote the heredoc delimiter so the shell does no expansion:
         # the body is literal, nothing inside gets interpreted.
         write_cmd = f"cat > {fname_q} <<'MEOW_EOF'\n{body}MEOW_EOF"
-        exclude_cmd = "\n".join(
-            f"grep -qxF {q} .git/info/exclude 2>/dev/null || echo {q} >> .git/info/exclude"
-            for q in (fname_q, report_q)
-        )
+        exclude_cmd = self._git_exclude_cmd(filename)
 
         checkout_timeout = self._config.checkout_timeout
 
@@ -438,6 +433,46 @@ class SandboxBuilder:
 
         self._steps.append(_Step(name="memory", run=step))
         return self
+
+    def with_report(self, *, report_filename: str = REPORT_FILE) -> Self:
+        """Git-ignore the agent's report file via ``.git/info/exclude``.
+
+        The agent writes its deliverable to this file (its ``write_file``
+        tool) and the ``run_*_vibe`` activity reads it back; excluding it
+        keeps the file out of the agent's ``git status`` / ``git diff`` so it
+        is never mistaken for repo content. Both the PR-review and
+        feature-scope sandboxes call this — it is independent of
+        :py:meth:`with_memory` (the PR scratchpad), so a use case can take the
+        report exclusion without a PR-scoped memory file. Excluding the path
+        before the file exists is harmless.
+        """
+        exclude_cmd = self._git_exclude_cmd(report_filename)
+        checkout_timeout = self._config.checkout_timeout
+
+        async def step(sb: AsyncSandbox) -> None:
+            await self._run(
+                sb,
+                exclude_cmd,
+                cwd=WORKING_DIR,
+                timeout=checkout_timeout,
+                fail_msg="git-ignore report file failed",
+            )
+
+        self._steps.append(_Step(name="report", run=step))
+        return self
+
+    @staticmethod
+    def _git_exclude_cmd(*paths: str) -> str:
+        """Shell snippet that appends each path to ``.git/info/exclude`` once.
+
+        Idempotent: ``grep -qxF`` skips paths already excluded, so re-running
+        never duplicates lines. Shared by ``with_memory`` and ``with_report``
+        so the exclude idiom lives in one place.
+        """
+        return "\n".join(
+            f"grep -qxF {q} .git/info/exclude 2>/dev/null || echo {q} >> .git/info/exclude"
+            for q in (shlex.quote(p) for p in paths)
+        )
 
     async def __aenter__(self) -> AsyncSandbox:
         for prep in self._prep_steps:
