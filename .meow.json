@@ -1,0 +1,5 @@
+{
+    "model": "mistral-medium-3.5",
+    "max_turns": 80,
+    "max_price_usd": 5
+}
