@@ -33,6 +33,9 @@ class IssueScopeInput(UnsetAwareModel):
     installation_id: int = Field(description="GitHub App installation ID — needed to mint a token")
     repo_full_name: str = Field(description="'owner/repo' — used for every API call")
     issue_number: int = Field(description="Issue number")
+    issue_state: Literal["open", "closed"] = Field(
+        description="Issue state — gate so a label on a closed issue doesn't scope it"
+    )
     default_branch: str = Field(description="Repo default branch — the ref the agent clones")
 
     # Issue content (straight from the payload — no API round-trip needed)
@@ -68,6 +71,7 @@ class IssueScopeInput(UnsetAwareModel):
             installation_id=event.installation.id,  # ty: ignore[unresolved-attribute]
             repo_full_name=event.repository.full_name,
             issue_number=event.issue.number,
+            issue_state=event.issue.state,
             default_branch=event.repository.default_branch,
             issue_title=event.issue.title,
             issue_body=event.issue.body,
@@ -93,6 +97,7 @@ class IssueScopeInput(UnsetAwareModel):
             installation_id=event.installation.id,  # ty: ignore[unresolved-attribute]
             repo_full_name=event.repository.full_name,
             issue_number=event.issue.number,
+            issue_state=event.issue.state,
             default_branch=event.repository.default_branch,
             issue_title=event.issue.title,
             issue_body=event.issue.body,

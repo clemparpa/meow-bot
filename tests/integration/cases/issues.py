@@ -66,6 +66,16 @@ ISSUES_CASES: list[WebhookCase] = [
         expected_body={"skipped": "no-intent"},
     ),
     WebhookCase(
+        id="issues_labeled_scope_on_closed_issue_no_intent",
+        event="issues",
+        # `meow:scope` added to a CLOSED issue — GitHub still fires `labeled`,
+        # but we must not clone + scope a closed issue.
+        payload_builder=lambda: issues_payload(
+            action="labeled", labels=[SCOPE_LABEL], added_label=SCOPE_LABEL, state="closed"
+        ),
+        expected_body={"skipped": "no-intent"},
+    ),
+    WebhookCase(
         id="issues_action_closed_skipped",
         event="issues",
         payload_builder=lambda: issues_payload(action="closed", labels=[SCOPE_LABEL]),

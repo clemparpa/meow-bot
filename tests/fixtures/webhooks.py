@@ -234,12 +234,14 @@ def issues_payload(
     body: str | None = "It would be nice to have a dark mode.",
     labels: list[str] | None = None,
     added_label: str | None = None,
+    state: str = "open",
 ) -> dict[str, Any]:
     """Build an ``issues`` webhook payload as a Python dict.
 
     ``labels`` are the names on the issue (peuplés sur ``opened``).
     ``added_label`` populates the top-level ``label`` field GitHub sends on
-    the ``labeled`` action (the single label just added).
+    the ``labeled`` action (the single label just added). ``state`` is the
+    issue state — ``"closed"`` exercises the closed-issue gate.
     """
     label_names = labels or []
     sender = _simple_user(sender_login, user_id=42)
@@ -265,7 +267,7 @@ def issues_payload(
         "number": 7,
         "reactions": _reactions(),
         "repository_url": "https://api.github.com/repos/octocat/hello",
-        "state": "open",
+        "state": state,
         "title": title,
         "updated_at": "2024-01-01T00:00:00Z",
         "url": "https://api.github.com/repos/octocat/hello/issues/7",
