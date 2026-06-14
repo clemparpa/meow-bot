@@ -24,6 +24,7 @@ import mistralai.workflows as workflows
 
 from meow.common.github.auth import github_installation_auth
 from meow.common.logging import get_logger
+from meow.worker.activities._comment_body import build_comment_body
 from meow.worker.models import VibeResult
 
 logger = get_logger("worker")
@@ -34,39 +35,6 @@ logger = get_logger("worker")
 _HEADER = "🐱 **meow-bot review** — [docs](https://github.com/clemparpa/meow-bot)"
 
 _TERMINATED_BANNER = "⚠️ **Review terminated early.**"
-_NO_OUTPUT_NOTE = "_No partial output was produced._"
-
-
-def _scrub_secrets(body: str) -> str:
-    """Placeholder for v0.1.0; real sanitisation lands in v0.2+ (spec §11.2).
-
-    Kept as a named seam so the call site doesn't have to change later.
-    """
-    return body
-
-
-def _build_body(result: VibeResult) -> str:
-    """Render the markdown body for a vibe result.
-
-    Three cases:
-    - Clean run with output: post the body as-is.
-    - Terminated early with a partial body: prepend a banner (+ optional
-      stop_reason) above the partial output, separated by an HR.
-    - Terminated early with no body: just the banner + stop_reason; no
-      partial output to show.
-    """
-    if not result.terminated_early and result.body is not None:
-        return _scrub_secrets(result.body)
-
-    parts = [_TERMINATED_BANNER]
-    if result.stop_reason:
-        parts.append(f"Reason: {_scrub_secrets(result.stop_reason)}")
-    if result.body is not None:
-        parts.append("---")
-        parts.append(_scrub_secrets(result.body))
-    else:
-        parts.append(_NO_OUTPUT_NOTE)
-    return "\n\n".join(parts)
 
 
 # 15s is enough for a slow POST; longer is a GitHub outage we'd rather
@@ -83,7 +51,7 @@ async def post_pr_comment(
         raise ValueError(f"repo_full_name must be 'owner/repo', got {repo_full_name!r}")
     owner, repo = repo_full_name.split("/", 1)
 
-    body = f"{_HEADER}\n\n---\n\n{_build_body(result)}"
+    body = f"{_HEADER}\n\n---\n\n{build_comment_body(result, banner=_TERMINATED_BANNER)}"
 
     async with github_installation_auth(
         installation_id,

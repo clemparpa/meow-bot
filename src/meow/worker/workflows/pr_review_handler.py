@@ -27,7 +27,7 @@ with workflows.workflow.unsafe.imports_passed_through():
     from meow.worker.activities.fetch_meow_config import fetch_meow_config
     from meow.worker.activities.fetch_pr_context import fetch_pr_context
     from meow.worker.activities.post_pr_comment import post_pr_comment
-    from meow.worker.activities.run_vibe import run_vibe
+    from meow.worker.activities.run_vibe import run_pr_review_vibe
     from meow.worker.models import PrSandboxSpec
     from meow.worker.vibe_tasks.tasks.pr_review import make_pr_review_task
 
@@ -73,7 +73,7 @@ class PrReviewWorkflow:
             pr_number=pr_number,
         )
 
-        result = await run_vibe(task, sandbox_spec)
+        result = await run_pr_review_vibe(task, sandbox_spec)
         url = await post_pr_comment(
             webhook.installation_id, webhook.repo_full_name, pr_number, result
         )

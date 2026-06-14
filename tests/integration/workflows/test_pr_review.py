@@ -46,7 +46,7 @@ async def test_pr_review_workflow_chains_activities(temporal_env: WorkflowEnviro
         activities=[
             fakes.fetch_pr_context,
             fakes.fetch_meow_config,
-            fakes.run_vibe,
+            fakes.run_pr_review_vibe,
             fakes.post_pr_comment,
         ],
         task_queue=_TASK_QUEUE,

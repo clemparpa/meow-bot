@@ -1,16 +1,18 @@
-"""Generic ``run_vibe`` activity.
+"""The ``run_*_vibe`` activities.
 
-One activity per vibe invocation: spin up a Koyeb sandbox configured by
+One activity per use case: spin up a Koyeb sandbox configured by
 :class:`SandboxBuilder`, run the prompt + agent encoded in the
 :class:`VibeTask`, and capture stdout/stderr as a :class:`VibeResult`.
-Per-use-case prompts/agents are picked by the workflow via factories
-(``meow.worker.vibe_tasks.*``). Post-vibe actions (posting a PR comment,
-opening an issue, …) live in separate activities so their retry
-boundary stays distinct from the expensive vibe run.
+``run_pr_review_vibe`` overlays the PR diff + a PR scratchpad;
+``run_feature_scope_vibe`` runs on a plain default-branch clone. They share
+the run/teardown core (:func:`_exec_vibe`) and differ only in how they wire
+the builder. Per-use-case prompts/agents are picked by the workflow via
+factories (``meow.worker.vibe_tasks.*``). Post-vibe actions (posting a PR or
+issue comment, …) live in separate activities so their retry boundary stays
+distinct from the expensive vibe run.
 
 The sandbox is always torn down via :py:meth:`SandboxBuilder.__aexit__`
-— including on exceptions — so a misbehaving review can't strand
-Koyeb compute.
+— including on exceptions — so a misbehaving run can't strand Koyeb compute.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from datetime import timedelta
 import mistralai.workflows as workflows
 
 from meow.common.logging import get_logger
-from meow.worker.models import PrSandboxSpec, VibeResult, VibeTask
+from meow.worker.models import PrSandboxSpec, ScopeSandboxSpec, VibeResult, VibeTask
 from meow.worker.sandbox.builder import (
     WORKING_DIR,
     SandboxBuilder,
@@ -32,7 +34,7 @@ from meow.worker.sandbox.builder import (
     read_file_or_empty,
 )
 
-__all__ = ["run_vibe"]
+__all__ = ["run_feature_scope_vibe", "run_pr_review_vibe"]
 
 logger = get_logger("worker")
 
@@ -62,39 +64,15 @@ async def _heartbeat_loop() -> None:
         workflows.activity_heartbeat()
 
 
-@workflows.activity(
-    start_to_close_timeout=_ACTIVITY_TIMEOUT,
-    heartbeat_timeout=_HEARTBEAT_TIMEOUT,
-)
-async def run_vibe(task: VibeTask, sandbox_spec: PrSandboxSpec) -> VibeResult:
-    """Run ``vibe`` inside a freshly-built PR-review sandbox.
+async def _exec_vibe(builder: SandboxBuilder, task: VibeTask) -> VibeResult:
+    """Build the sandbox, run the task's ``vibe`` command, capture the report.
 
-    The sandbox is always deleted on exit. A deadline overrun returns a
-    terminated-early result (so the workflow still posts a comment); other
-    exceptions are re-raised so the framework applies its retry policy.
+    Shared core of the ``run_*_vibe`` activities — they differ only in how
+    they wire the :class:`SandboxBuilder` (PR diff + memory vs. a plain
+    default-branch clone). The sandbox is always deleted on exit. A deadline
+    overrun returns a terminated-early result (so the workflow still posts a
+    comment); other exceptions propagate so the framework retries.
     """
-    builder = (
-        SandboxBuilder(config=SandboxBuilderConfig(delete_after_delay=_DELETE_AFTER_DELAY))
-        .with_meow_secrets(
-            installation_id=sandbox_spec.installation_id,
-            repo_full_name=sandbox_spec.repo_full_name,
-        )
-        .with_clone(
-            repo_full_name=sandbox_spec.repo_full_name,
-            ref=sandbox_spec.base_sha,
-        )
-        .with_pr_diff(
-            pr_number=sandbox_spec.pr_number,
-            base_sha=sandbox_spec.base_sha,
-            head_sha=sandbox_spec.head_sha,
-        )
-        .with_memory(
-            pr_number=sandbox_spec.pr_number,
-            base_sha=sandbox_spec.base_sha,
-            head_sha=sandbox_spec.head_sha,
-            repo_full_name=sandbox_spec.repo_full_name,
-        )
-    )
     heartbeat = asyncio.create_task(_heartbeat_loop())
     try:
         async with builder as sandbox:
@@ -138,3 +116,67 @@ async def run_vibe(task: VibeTask, sandbox_spec: PrSandboxSpec) -> VibeResult:
         heartbeat.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await heartbeat
+
+
+@workflows.activity(
+    start_to_close_timeout=_ACTIVITY_TIMEOUT,
+    heartbeat_timeout=_HEARTBEAT_TIMEOUT,
+)
+async def run_pr_review_vibe(task: VibeTask, sandbox_spec: PrSandboxSpec) -> VibeResult:
+    """Run ``vibe`` inside a freshly-built PR-review sandbox.
+
+    The working tree holds the PR diff (``with_pr_diff``) and a PR-scoped
+    memory scratchpad (``with_memory``); the report file is git-ignored
+    (``with_report``). See :func:`_exec_vibe` for the run/teardown semantics.
+    """
+    builder = (
+        SandboxBuilder(config=SandboxBuilderConfig(delete_after_delay=_DELETE_AFTER_DELAY))
+        .with_meow_secrets(
+            installation_id=sandbox_spec.installation_id,
+            repo_full_name=sandbox_spec.repo_full_name,
+        )
+        .with_clone(
+            repo_full_name=sandbox_spec.repo_full_name,
+            ref=sandbox_spec.base_sha,
+        )
+        .with_pr_diff(
+            pr_number=sandbox_spec.pr_number,
+            base_sha=sandbox_spec.base_sha,
+            head_sha=sandbox_spec.head_sha,
+        )
+        .with_memory(
+            pr_number=sandbox_spec.pr_number,
+            base_sha=sandbox_spec.base_sha,
+            head_sha=sandbox_spec.head_sha,
+            repo_full_name=sandbox_spec.repo_full_name,
+        )
+        .with_report()
+    )
+    return await _exec_vibe(builder, task)
+
+
+@workflows.activity(
+    start_to_close_timeout=_ACTIVITY_TIMEOUT,
+    heartbeat_timeout=_HEARTBEAT_TIMEOUT,
+)
+async def run_feature_scope_vibe(task: VibeTask, sandbox_spec: ScopeSandboxSpec) -> VibeResult:
+    """Run ``vibe`` inside a feature-scoping sandbox.
+
+    A plain clone of the default branch — no PR diff to overlay. The report
+    file is git-ignored (``with_report``) so the agent's ``git status`` stays
+    clean, without a PR-scoped memory scratchpad. See :func:`_exec_vibe` for
+    the run/teardown semantics.
+    """
+    builder = (
+        SandboxBuilder(config=SandboxBuilderConfig(delete_after_delay=_DELETE_AFTER_DELAY))
+        .with_meow_secrets(
+            installation_id=sandbox_spec.installation_id,
+            repo_full_name=sandbox_spec.repo_full_name,
+        )
+        .with_clone(
+            repo_full_name=sandbox_spec.repo_full_name,
+            ref=sandbox_spec.ref,
+        )
+        .with_report()
+    )
+    return await _exec_vibe(builder, task)
