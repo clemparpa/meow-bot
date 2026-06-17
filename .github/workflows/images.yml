@@ -64,7 +64,7 @@ jobs:
           # paths-filter diffs HEAD against its parent on push events.
           fetch-depth: 2
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: changes
         with:
           filters: |
