@@ -26,8 +26,9 @@ from meow.worker.models import VibeResult
 
 logger = get_logger("worker")
 
-# Distinct header so the scoping report reads differently from a PR review and
-# future versions can grep these out of an issue thread.
+# Default header/banner for the scoping report. Callers for other issue-driven
+# intents (e.g. the implementation flow's zero-diff fallback) override them so
+# the same endpoint can serve every issue comment without drifting renderers.
 _HEADER = "🔍 **meow-bot scope** — [docs](https://github.com/clemparpa/meow-bot)"
 
 _TERMINATED_BANNER = "⚠️ **Scoping terminated early.**"
@@ -39,12 +40,14 @@ async def post_issue_comment(
     repo_full_name: str,
     issue_number: int,
     result: VibeResult,
+    header: str = _HEADER,
+    terminated_banner: str = _TERMINATED_BANNER,
 ) -> str:
     if repo_full_name.count("/") != 1:
         raise ValueError(f"repo_full_name must be 'owner/repo', got {repo_full_name!r}")
     owner, repo = repo_full_name.split("/", 1)
 
-    body = f"{_HEADER}\n\n---\n\n{build_comment_body(result, banner=_TERMINATED_BANNER)}"
+    body = f"{header}\n\n---\n\n{build_comment_body(result, banner=terminated_banner)}"
 
     async with github_installation_auth(
         installation_id,

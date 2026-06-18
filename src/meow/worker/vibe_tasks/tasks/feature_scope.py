@@ -10,7 +10,7 @@ The prompt prose lives in ``prompts/feature_scope.md`` and is rendered through
 
 from __future__ import annotations
 
-from meow.common.webhooks_inputs.issues import IssueScopeInput
+from meow.common.webhooks_inputs.issues import IssueEventInput
 from meow.worker.models import MeowConfig, VibeTask
 from meow.worker.sandbox.builder import REPORT_PATH, WORKING_DIR
 from meow.worker.vibe_tasks._prompts import render_prompt
@@ -26,7 +26,7 @@ _AGENT = "issue_commenter"
 _AGENTS_MD = "AGENTS.md"
 
 
-def make_feature_scope_task(webhook: IssueScopeInput, cfg: MeowConfig) -> VibeTask:
+def make_feature_scope_task(webhook: IssueEventInput, cfg: MeowConfig) -> VibeTask:
     """Build the VibeTask that drives a single feature-scoping run."""
     prompt = render_prompt(
         "feature_scope.md",

@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
-from meow.common.webhooks_inputs.issues import IssueScopeInput
-from meow.common.workflows import FEATURE_SCOPE_WORKFLOW
-from meow.receiver.controllers.issues import SCOPE_LABEL
+from meow.common.webhooks_inputs.issues import IssueEventInput
+from meow.common.workflows import FEATURE_IMPLEMENT_WORKFLOW, FEATURE_SCOPE_WORKFLOW
+from meow.receiver.controllers.issues import IMPLEMENT_LABEL, SCOPE_LABEL
 from tests.conftest import TEST_BOT_LOGIN
 from tests.fixtures.webhooks import issues_payload
 from tests.integration.cases._models import ExpectedDispatch, WebhookCase
 
 
-def _assert_scope_input(input_model: IssueScopeInput) -> None:
-    assert isinstance(input_model, IssueScopeInput)
+def _assert_scope_input(input_model: IssueEventInput) -> None:
+    assert isinstance(input_model, IssueEventInput)
     assert input_model.repo_full_name == "octocat/hello"
     assert input_model.issue_number == 7
     assert input_model.default_branch == "main"
     assert SCOPE_LABEL in input_model.labels
+
+
+def _assert_implement_input(input_model: IssueEventInput) -> None:
+    assert isinstance(input_model, IssueEventInput)
+    assert input_model.repo_full_name == "octocat/hello"
+    assert input_model.issue_number == 7
+    assert input_model.default_branch == "main"
+    assert IMPLEMENT_LABEL in input_model.labels
 
 
 ISSUES_CASES: list[WebhookCase] = [
@@ -80,5 +88,51 @@ ISSUES_CASES: list[WebhookCase] = [
         event="issues",
         payload_builder=lambda: issues_payload(action="closed", labels=[SCOPE_LABEL]),
         expected_body={"skipped": "action"},
+    ),
+    # --- meow:implement routes -------------------------------------------
+    WebhookCase(
+        id="issues_opened_with_implement_label_dispatched",
+        event="issues",
+        payload_builder=lambda: issues_payload(action="opened", labels=[IMPLEMENT_LABEL, "bug"]),
+        expected_body={"queued": True, "execution_id": "spy-exec"},
+        expected_dispatch=ExpectedDispatch(
+            workflow_id=FEATURE_IMPLEMENT_WORKFLOW,
+            assert_input=_assert_implement_input,
+        ),
+    ),
+    WebhookCase(
+        id="issues_labeled_implement_dispatched",
+        event="issues",
+        payload_builder=lambda: issues_payload(
+            action="labeled", labels=[IMPLEMENT_LABEL], added_label=IMPLEMENT_LABEL
+        ),
+        expected_body={"queued": True, "execution_id": "spy-exec"},
+        expected_dispatch=ExpectedDispatch(
+            workflow_id=FEATURE_IMPLEMENT_WORKFLOW,
+            assert_input=_assert_implement_input,
+        ),
+    ),
+    WebhookCase(
+        id="issues_labeled_implement_on_closed_issue_no_intent",
+        event="issues",
+        payload_builder=lambda: issues_payload(
+            action="labeled", labels=[IMPLEMENT_LABEL], added_label=IMPLEMENT_LABEL, state="closed"
+        ),
+        expected_body={"skipped": "no-intent"},
+    ),
+    WebhookCase(
+        id="issues_opened_with_both_labels_scope_wins",
+        event="issues",
+        # Both labels present at creation. The dispatcher fires the first
+        # matching predicate and stops; scope routes are defined first, so
+        # scoping (the cheaper intent) wins — implementation does not also run.
+        payload_builder=lambda: issues_payload(
+            action="opened", labels=[SCOPE_LABEL, IMPLEMENT_LABEL]
+        ),
+        expected_body={"queued": True, "execution_id": "spy-exec"},
+        expected_dispatch=ExpectedDispatch(
+            workflow_id=FEATURE_SCOPE_WORKFLOW,
+            assert_input=_assert_scope_input,
+        ),
     ),
 ]

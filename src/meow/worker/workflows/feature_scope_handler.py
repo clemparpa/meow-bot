@@ -9,7 +9,7 @@ an activity. The activity modules and the input model transitively import I/O
 libraries (githubkit, koyeb) that the Temporal sandbox refuses by default;
 they go through ``workflows.workflow.unsafe.imports_passed_through()``.
 
-The input arrives as the JSON dump of an ``IssueScopeInput`` (produced by the
+The input arrives as the JSON dump of an ``IssueEventInput`` (produced by the
 receiver). We rebuild the typed model via ``model_validate`` — pydantic
 validation is pure-Python and safe inside the deterministic sandbox; only the
 from_* factory paths, which we don't touch here, would pull in githubkit.
@@ -25,11 +25,11 @@ from meow.common.logging import get_logger
 from meow.common.workflows import FEATURE_SCOPE_WORKFLOW
 
 with workflows.workflow.unsafe.imports_passed_through():
-    from meow.common.webhooks_inputs.issues import IssueScopeInput
+    from meow.common.webhooks_inputs.issues import IssueEventInput
     from meow.worker.activities.fetch_meow_config import fetch_meow_config
     from meow.worker.activities.post_issue_comment import post_issue_comment
     from meow.worker.activities.run_vibe import run_feature_scope_vibe
-    from meow.worker.models import ScopeSandboxSpec
+    from meow.worker.models import CloneSandboxSpec
     from meow.worker.vibe_tasks.tasks.feature_scope import make_feature_scope_task
 
 logger = get_logger("worker")
@@ -43,7 +43,7 @@ logger = get_logger("worker")
 class FeatureScopeWorkflow:
     @workflows.workflow.entrypoint
     async def run(self, input: dict) -> str | None:
-        webhook = IssueScopeInput.model_validate(input)
+        webhook = IssueEventInput.model_validate(input)
 
         logger.info(
             "workflow.feature_scope.started",
@@ -56,7 +56,7 @@ class FeatureScopeWorkflow:
             webhook.installation_id, webhook.repo_full_name, webhook.default_branch
         )
 
-        sandbox_spec = ScopeSandboxSpec(
+        sandbox_spec = CloneSandboxSpec(
             installation_id=webhook.installation_id,
             repo_full_name=webhook.repo_full_name,
             ref=webhook.default_branch,
