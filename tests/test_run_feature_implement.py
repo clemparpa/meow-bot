@@ -77,7 +77,24 @@ async def test_extract_changeset_reads_adds_and_flags_deletes() -> None:
     }
     # The only command run is the read-only status probe.
     assert len(sandbox.launched) == 1
-    assert "git status --porcelain=v1 -z --no-renames" in sandbox.launched[0][0]
+    cmd = sandbox.launched[0][0]
+    assert "git status --porcelain=v1 -z --no-renames" in cmd
+    # `-uall` so files inside a brand-new directory are listed individually
+    # (git would otherwise collapse them into a single `?? dir/` entry).
+    assert "--untracked-files=all" in cmd
+
+
+async def test_extract_changeset_lists_files_in_new_directories() -> None:
+    # A whole new directory: git with -uall reports each file, not `?? pkg/`.
+    sandbox = _ChangesetSandbox(
+        status_out="?? pkg/__init__.py\x00?? pkg/core.py\x00",
+        files={"/work/repo/pkg/__init__.py": "", "/work/repo/pkg/core.py": "x = 1"},
+    )
+
+    changeset = await _extract_changeset(cast(AsyncSandbox, sandbox))
+
+    by_path = {f.path: f.content for f in changeset.files}
+    assert by_path == {"pkg/__init__.py": "", "pkg/core.py": "x = 1"}
 
 
 async def test_extract_changeset_empty_when_clean() -> None:

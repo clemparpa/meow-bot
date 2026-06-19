@@ -238,13 +238,17 @@ async def _extract_changeset(sandbox: AsyncSandbox) -> Changeset:
     field, so a binary file can't be represented and we bail rather than push a
     partial PR. Module-level so it's unit-testable against a fake sandbox.
     """
-    # `--no-renames` keeps every entry a plain ``XY <path>`` (a rename becomes a
-    # delete + an untracked add) so there's no second NUL field to parse — and
-    # ``-z`` means paths are never quoted. Each entry: two status chars, a space,
-    # then the path; a ``D`` in either status column is a deletion.
+    # `--untracked-files=all` lists every new file individually — without it git
+    # collapses a brand-new directory into a single ``?? dir/`` entry and we'd
+    # miss its files (and try to read a directory as a file). It's the `git add
+    # .` recursion we need. `--no-renames` keeps every entry a plain ``XY
+    # <path>`` (a rename becomes a delete + an untracked add) so there's no
+    # second NUL field to parse — and ``-z`` means paths are never quoted. Each
+    # entry: two status chars, a space, then the path; a ``D`` in either status
+    # column is a deletion.
     exit_code, stdout, stderr = await exec_polling(
         sandbox,
-        "git status --porcelain=v1 -z --no-renames",
+        "git status --porcelain=v1 -z --no-renames --untracked-files=all",
         cwd=WORKING_DIR,
         timeout=_GIT_READ_TIMEOUT,
     )
