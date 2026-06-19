@@ -1,11 +1,11 @@
-"""Factory for the "scope a feature request" vibe task.
+"""Factory for the "implement a feature" vibe task.
 
 A factory is a pure function that turns request-scoped inputs (the issue
 content + repo coords + the user's ``.meow.yml``) into a :class:`VibeTask`.
 Lives outside ``activities/`` because it's CPU-only prompt rendering — no I/O.
 
-The prompt prose lives in ``prompts/feature_scope.md`` and is rendered through
-:func:`meow.worker.vibe_tasks._prompts.render_prompt`.
+The prompt prose lives in ``prompts/feature_implement.md`` and is rendered
+through :func:`meow.worker.vibe_tasks._prompts.render_prompt`.
 """
 
 from __future__ import annotations
@@ -15,21 +15,22 @@ from meow.worker.models import MeowConfig, VibeTask
 from meow.worker.sandbox.builder import REPORT_PATH, WORKING_DIR
 from meow.worker.vibe_tasks._prompts import render_prompt
 
-__all__ = ["make_feature_scope_task"]
+__all__ = ["make_feature_implement_task"]
 
 
-# Reuses the read-only agent shipped in the sandbox image
-# (sandbox_files/.vibe/agents/issue_commenter.toml): read_file, grep, bash,
-# todo, write_file — exactly the profile a scoping pass needs (explore, then
-# write its report to REPORT_PATH, which run_feature_scope_vibe reads back).
-_AGENT = "issue_commenter"
+# Write-capable agent shipped in the sandbox image
+# (sandbox_files/.vibe/agents/feature_implementer.toml): adds `search_replace`
+# to the read-only profile so it can edit code. It writes the PR description to
+# REPORT_PATH, which run_feature_implement_vibe reads back; git plumbing is done
+# by the activity, not the agent.
+_AGENT = "feature_implementer"
 _AGENTS_MD = "AGENTS.md"
 
 
-def make_feature_scope_task(webhook: IssueEventInput, cfg: MeowConfig) -> VibeTask:
-    """Build the VibeTask that drives a single feature-scoping run."""
+def make_feature_implement_task(webhook: IssueEventInput, cfg: MeowConfig) -> VibeTask:
+    """Build the VibeTask that drives a single feature-implementation run."""
     prompt = render_prompt(
-        "feature_scope.md",
+        "feature_implement.md",
         repo_full_name=webhook.repo_full_name,
         issue_number=webhook.issue_number,
         issue_title=webhook.issue_title,

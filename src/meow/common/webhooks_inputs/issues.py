@@ -19,13 +19,16 @@ def _label_names(labels: object) -> list[str]:
     return [label.name for label in labels]  # ty: ignore[not-iterable]
 
 
-class IssueScopeInput(UnsetAwareModel):
-    """Workflow input for the ``issues`` event family (feature scoping).
+class IssueEventInput(UnsetAwareModel):
+    """Workflow input for the ``issues`` event family.
 
-    Carries exactly what ``FeatureScopeWorkflow`` needs to clone the default
-    branch and post a scoping report — the full webhook envelope stays at the
-    receiver. The ``issues`` event never fires for PRs, so there is no
-    ``is_pr`` gate here.
+    Shared by every ``issues``-driven workflow (feature scoping *and* feature
+    implementation): the receiver can only register one factory per
+    ``(event, event_type)``, so both intents read the same model. It carries
+    exactly what those workflows need to clone the default branch and act on
+    the issue (title/body, labels, default branch) — the full webhook envelope
+    stays at the receiver. The ``issues`` event never fires for PRs, so there
+    is no ``is_pr`` gate here.
     """
 
     # Auth & GitHub coordinates

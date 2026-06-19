@@ -19,10 +19,11 @@ from concurrent.futures import ThreadPoolExecutor
 import mistralai.workflows as workflows
 
 from meow.common.logging import get_logger
+from meow.worker.workflows.feature_implement_handler import FeatureImplementWorkflow
 from meow.worker.workflows.feature_scope_handler import FeatureScopeWorkflow
 from meow.worker.workflows.pr_review_handler import PrReviewWorkflow
 
-_WORKFLOWS = [PrReviewWorkflow, FeatureScopeWorkflow]
+_WORKFLOWS = [PrReviewWorkflow, FeatureScopeWorkflow, FeatureImplementWorkflow]
 
 # Matches the port Koyeb pre-configures on Worker services. Overridable so
 # the same image runs on hosts that probe a different port.

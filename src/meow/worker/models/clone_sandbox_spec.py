@@ -1,7 +1,9 @@
-"""Sandbox coordinates for a feature-scoping ``run_feature_scope_vibe`` activity.
+"""Sandbox coordinates for a read-only single-branch clone.
 
-The scoping agent explores a clean checkout of the repo's default branch —
-no PR diff to overlay — so this spec is deliberately leaner than
+Shared by every workflow whose agent only needs a clean checkout of one ref —
+feature scoping and feature implementation both work on a read-only clone of the
+default branch and never push from the sandbox (implementation extracts the
+agent's changeset and commits it worker-side). Deliberately leaner than
 :class:`PrSandboxSpec`: just enough for ``with_clone`` (+ ``with_meow_secrets``).
 The workflow assembles it straight from the ``issues`` webhook payload, which
 already carries ``repository.default_branch``.
@@ -11,10 +13,10 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["ScopeSandboxSpec"]
+__all__ = ["CloneSandboxSpec"]
 
 
-class ScopeSandboxSpec(BaseModel):
+class CloneSandboxSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     installation_id: int = Field(gt=0)
