@@ -18,6 +18,7 @@ from meow.worker.sandbox.builder import (
     MEMORY_FILE,
     REPORT_FILE,
     SandboxBuilder,
+    feature_branch_name,
 )
 from tests.test_exec_polling import _FakeSandbox
 
@@ -57,3 +58,7 @@ async def test_with_report_excludes_report_without_memory() -> None:
     # ...but writes no memory scratchpad (no heredoc, no memory filename).
     assert MEMORY_FILE not in cmd
     assert "MEOW_EOF" not in cmd
+
+
+def test_feature_branch_name_is_deterministic_per_issue() -> None:
+    assert feature_branch_name(42) == "meow/issue-42"

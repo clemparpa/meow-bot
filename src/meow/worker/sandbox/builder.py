@@ -46,6 +46,7 @@ __all__ = [
     "SandboxExecTimeout",
     "WORKING_DIR",
     "exec_polling",
+    "feature_branch_name",
     "pr_ref_name",
     "read_file_or_empty",
 ]
@@ -190,6 +191,17 @@ def pr_ref_name(pr_number: int) -> str:
     without re-deriving the convention.
     """
     return f"pr-{pr_number}"
+
+
+def feature_branch_name(issue_number: int) -> str:
+    """Branch the implementation flow lands its commit on.
+
+    One deterministic branch per issue so re-runs force-update the same branch
+    (and update the same PR) instead of stacking duplicates. Shared by the
+    ``commit_changeset`` activity (creates/force-updates it via the Git Data
+    API) and the ``open_pull_request`` activity (uses it as the PR head).
+    """
+    return f"meow/issue-{issue_number}"
 
 
 class SandboxBuilderConfig(BaseModel):

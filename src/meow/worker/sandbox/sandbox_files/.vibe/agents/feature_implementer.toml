@@ -1,0 +1,17 @@
+display_name = "Feature Implementer"
+description = "Agent that implements a feature on a branch from a labelled issue"
+safety = "safe"
+agent_type = "agent"
+# system_prompt_id=
+enabled_tools = [
+    "read_file",
+    "write_file",
+    "search_replace",
+    "grep",
+    "todo",
+    "bash",
+    "skill",
+    "task",
+]
+
+enabled_skills = []

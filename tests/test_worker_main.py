@@ -60,11 +60,16 @@ def test_main_starts_worker(caplog: pytest.LogCaptureFixture) -> None:
     assert [
         worker_main.PrReviewWorkflow,
         worker_main.FeatureScopeWorkflow,
+        worker_main.FeatureImplementWorkflow,
     ] == worker_main._WORKFLOWS
 
     started: list[Any] = [r for r in caplog.records if r.message == "worker.started"]
     assert len(started) == 1
-    assert started[0].workflows == ["PrReviewWorkflow", "FeatureScopeWorkflow"]
+    assert started[0].workflows == [
+        "PrReviewWorkflow",
+        "FeatureScopeWorkflow",
+        "FeatureImplementWorkflow",
+    ]
 
 
 def test_main_uses_liveness_port_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
