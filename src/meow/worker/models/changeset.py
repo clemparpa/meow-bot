@@ -2,9 +2,10 @@
 
 ``run_feature_implement_vibe`` extracts this from a read-only sandbox (the agent
 never touches git); the ``commit_changeset`` activity turns it into a commit via
-the GitHub Git Data API. It crosses the workflow boundary, so file contents are
-base64-encoded (binary-safe) and the whole set is size-capped upstream to stay
-under the workflow payload limit.
+the GitHub Git Data API, feeding each file's text straight into a tree entry's
+``content`` field. Contents are plain UTF-8 text (the agent writes code) — a
+file that doesn't decode as UTF-8 makes extraction drop the whole changeset. The
+set is size-capped upstream to stay under the workflow payload limit.
 """
 
 from __future__ import annotations
@@ -19,9 +20,9 @@ class FileChange(BaseModel):
 
     # Repo-relative path of the changed file.
     path: str = Field(min_length=1)
-    # Base64-encoded new content, or ``None`` to delete the path. Base64 so
-    # binary files survive the JSON/workflow round-trip unharmed.
-    content_b64: str | None = None
+    # New file content as plain UTF-8 text, fed inline to the Git Data API's
+    # tree ``content`` field. ``None`` deletes the path.
+    content: str | None = None
 
 
 class Changeset(BaseModel):

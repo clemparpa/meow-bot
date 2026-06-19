@@ -21,7 +21,6 @@ The sandbox is always torn down via :py:meth:`SandboxBuilder.__aexit__`
 from __future__ import annotations
 
 import asyncio
-import base64
 import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -222,7 +221,7 @@ async def run_feature_scope_vibe(task: VibeTask, sandbox_spec: CloneSandboxSpec)
 
 
 async def _read_bytes(sandbox: AsyncSandbox, path: str) -> bytes:
-    """Read a sandbox file as raw bytes (binary-safe via base64 transport)."""
+    """Read a sandbox file as raw bytes (via base64 transport, binary-safe)."""
     info = await sandbox.filesystem.read_file(path, encoding="base64")
     content = info.content
     return content if isinstance(content, bytes) else content.encode("utf-8")
@@ -232,10 +231,12 @@ async def _extract_changeset(sandbox: AsyncSandbox) -> Changeset:
     """Read the agent's working-tree changes out of the read-only sandbox.
 
     Uses ``git status`` (read-only) to find what changed, then reads each
-    surviving file's bytes for a worker-side commit. Returns an empty changeset
-    when nothing changed or when the diff exceeds :data:`_MAX_CHANGESET_BYTES`
-    (the workflow then posts a comment instead of opening a PR). Module-level so
-    it's unit-testable against a fake sandbox.
+    surviving file's text for a worker-side commit. Returns an empty changeset
+    (so the workflow posts a comment instead of opening a PR) when nothing
+    changed, when the diff exceeds :data:`_MAX_CHANGESET_BYTES`, or when a file
+    isn't valid UTF-8 — we commit text inline via the Git Data API's ``content``
+    field, so a binary file can't be represented and we bail rather than push a
+    partial PR. Module-level so it's unit-testable against a fake sandbox.
     """
     # `--no-renames` keeps every entry a plain ``XY <path>`` (a rename becomes a
     # delete + an untracked add) so there's no second NUL field to parse — and
@@ -258,7 +259,7 @@ async def _extract_changeset(sandbox: AsyncSandbox) -> Changeset:
             continue
         status, path = entry[:2], entry[3:]
         if "D" in status:
-            files.append(FileChange(path=path, content_b64=None))
+            files.append(FileChange(path=path, content=None))
             continue
         raw = await _read_bytes(sandbox, f"{WORKING_DIR}/{path}")
         total += len(raw)
@@ -268,7 +269,12 @@ async def _extract_changeset(sandbox: AsyncSandbox) -> Changeset:
                 extra={"bytes": total, "limit": _MAX_CHANGESET_BYTES},
             )
             return Changeset(files=[])
-        files.append(FileChange(path=path, content_b64=base64.b64encode(raw).decode("ascii")))
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            logger.warning("run_feature_implement_vibe.binary_file", extra={"path": path})
+            return Changeset(files=[])
+        files.append(FileChange(path=path, content=text))
     return Changeset(files=files)
 
 
