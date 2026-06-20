@@ -28,6 +28,7 @@ from datetime import timedelta
 
 import mistralai.workflows as workflows
 from koyeb import AsyncSandbox
+from koyeb.sandbox import FileInfo
 
 from meow.common.logging import get_logger
 from meow.worker.models import (
@@ -73,10 +74,10 @@ _IMPL_DELETE_AFTER_DELAY = 60 * 30
 # Ceiling for the read-only `git status` used to extract the changeset.
 _GIT_READ_TIMEOUT = 60
 
-# Cap on the raw bytes of an implementation changeset. The changeset crosses the
-# workflow boundary (and base64 inflates it ~33%), so an over-large diff would
-# blow the payload limit — we drop it and let the workflow post a comment
-# instead of committing a partial/garbage tree.
+# Cap on the UTF-8 bytes of an implementation changeset. The changeset crosses
+# the workflow boundary, so an over-large diff would blow the payload limit — we
+# drop it and let the workflow post a comment instead of committing a partial
+# tree.
 _MAX_CHANGESET_BYTES = 1_200_000
 
 # A background task heartbeats for the WHOLE activity — clone + sandbox
@@ -220,11 +221,35 @@ async def run_feature_scope_vibe(task: VibeTask, sandbox_spec: CloneSandboxSpec)
         return result
 
 
-async def _read_bytes(sandbox: AsyncSandbox, path: str) -> bytes:
-    """Read a sandbox file as raw bytes (via base64 transport, binary-safe)."""
-    info = await sandbox.filesystem.read_file(path, encoding="base64")
+async def _read_text(sandbox: AsyncSandbox, path: str) -> str | None:
+    """Read a sandbox file as UTF-8 text, or ``None`` if it isn't text.
+
+    koyeb's executor returns a file's content as a JSON string (it decodes the
+    bytes server-side), so the default ``encoding="utf-8"`` hands us that ``str``
+    directly — accents and emoji included. We deliberately avoid
+    ``encoding="base64"``: that koyeb path ``b64decode``s the raw text and raises
+    ``string argument should contain only ASCII characters`` on the first
+    non-ASCII byte.
+
+    A binary file can't be committed inline through the Git Data API's ``content``
+    field anyway, so we return ``None`` — and the caller drops the whole changeset
+    — when the read fails or the content isn't valid UTF-8. Binary detection is
+    best-effort: koyeb usually hands us an already-decoded ``str`` (it decodes
+    server-side), so the strict decode only catches a binary that came back as raw
+    ``bytes``; faithful detection would need the raw bytes (a base64 transport).
+    """
+    try:
+        info: FileInfo = await sandbox.filesystem.read_file(path)
+    except Exception:
+        logger.warning("run_feature_implement_vibe.unreadable_file", extra={"path": path})
+        return None
     content = info.content
-    return content if isinstance(content, bytes) else content.encode("utf-8")
+    try:
+        text = content if isinstance(content, str) else content.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        logger.warning("run_feature_implement_vibe.binary_file", extra={"path": path})
+        return None
+    return text
 
 
 async def _extract_changeset(sandbox: AsyncSandbox) -> Changeset:
@@ -234,9 +259,10 @@ async def _extract_changeset(sandbox: AsyncSandbox) -> Changeset:
     surviving file's text for a worker-side commit. Returns an empty changeset
     (so the workflow posts a comment instead of opening a PR) when nothing
     changed, when the diff exceeds :data:`_MAX_CHANGESET_BYTES`, or when a file
-    isn't valid UTF-8 — we commit text inline via the Git Data API's ``content``
-    field, so a binary file can't be represented and we bail rather than push a
-    partial PR. Module-level so it's unit-testable against a fake sandbox.
+    isn't text (see :func:`_read_text`) — we commit text inline via the Git Data
+    API's ``content`` field, so a binary file can't be represented and we bail
+    rather than push a partial PR. Module-level so it's unit-testable against a
+    fake sandbox.
     """
     # `--untracked-files=all` lists every new file individually — without it git
     # collapses a brand-new directory into a single ``?? dir/`` entry and we'd
@@ -265,18 +291,15 @@ async def _extract_changeset(sandbox: AsyncSandbox) -> Changeset:
         if "D" in status:
             files.append(FileChange(path=path, content=None))
             continue
-        raw = await _read_bytes(sandbox, f"{WORKING_DIR}/{path}")
-        total += len(raw)
+        text = await _read_text(sandbox, f"{WORKING_DIR}/{path}")
+        if text is None:  # binary or unreadable → never ship a partial PR
+            return Changeset(files=[])
+        total += len(text.encode("utf-8"))
         if total > _MAX_CHANGESET_BYTES:
             logger.warning(
                 "run_feature_implement_vibe.changeset_too_large",
                 extra={"bytes": total, "limit": _MAX_CHANGESET_BYTES},
             )
-            return Changeset(files=[])
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            logger.warning("run_feature_implement_vibe.binary_file", extra={"path": path})
             return Changeset(files=[])
         files.append(FileChange(path=path, content=text))
     return Changeset(files=files)
