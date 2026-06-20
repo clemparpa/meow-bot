@@ -4,15 +4,17 @@ from githubkit.rest import WebhookIssueCommentCreated
 from githubkit.utils import UNSET
 from pydantic import Field
 
-from meow.common.webhooks_inputs.base_model import UnsetAwareModel
+from meow.common.webhooks_inputs.base_model import WebhookInput
 from meow.receiver.utils import WebhookContext
 
 
-class IssueCommentInput(UnsetAwareModel):
+class IssueCommentInput(WebhookInput):
     """Input du workflow pour issue_comment.created.
 
     Strictement ce dont le workflow a besoin pour décider et agir —
-    l'enveloppe webhook complète reste au receiver.
+    l'enveloppe webhook complète reste au receiver. L'idempotence reste keyée
+    sur le delivery (clé par défaut) : chaque commentaire est une intention
+    distincte qui doit re-déclencher.
     """
 
     # Auth & coordonnées GitHub
@@ -28,11 +30,6 @@ class IssueCommentInput(UnsetAwareModel):
     # Contenu du commentaire
     comment_body: str = Field(description="Used for intent detection (e.g. '@meow-bot review')")
     sender_login: str = Field(description="Author of the comment — for attribution and logs")
-
-    # Traçabilité
-    delivery: str | None = Field(
-        default=None, description="X-GitHub-Delivery — workflow idempotency key"
-    )
 
     @classmethod
     def from_issue_comment_created(
