@@ -4,7 +4,7 @@ from githubkit.rest import WebhookIssuesLabeled, WebhookIssuesOpened
 from githubkit.utils import UNSET
 from pydantic import Field
 
-from meow.common.webhooks_inputs.base_model import UnsetAwareModel
+from meow.common.webhooks_inputs.base_model import WebhookInput
 from meow.receiver.utils import WebhookContext
 
 
@@ -19,7 +19,7 @@ def _label_names(labels: object) -> list[str]:
     return [label.name for label in labels]  # ty: ignore[not-iterable]
 
 
-class IssueEventInput(UnsetAwareModel):
+class IssueEventInput(WebhookInput):
     """Workflow input for the ``issues`` event family.
 
     Shared by every ``issues``-driven workflow (feature scoping *and* feature
@@ -29,6 +29,10 @@ class IssueEventInput(UnsetAwareModel):
     the issue (title/body, labels, default branch) — the full webhook envelope
     stays at the receiver. The ``issues`` event never fires for PRs, so there
     is no ``is_pr`` gate here.
+
+    Idempotency is keyed on ``(repo, issue_number)``, not the delivery: opening
+    an issue already carrying the label fires both ``opened`` and ``labeled``,
+    and both must collapse onto a single workflow execution.
     """
 
     # Auth & GitHub coordinates
@@ -55,10 +59,11 @@ class IssueEventInput(UnsetAwareModel):
 
     sender_login: str = Field(description="Actor who opened/labeled the issue — for logs")
 
-    # Traceability
-    delivery: str | None = Field(
-        default=None, description="X-GitHub-Delivery — workflow idempotency key"
-    )
+    def idempotency_key(self) -> str:
+        # Collapse opened+labeled (and any redelivery) for one issue. Repo-scoped
+        # because the Mistral execution_id is unique per workspace, so issue #N
+        # of two repos must not dedup against each other.
+        return f"{self.repo_full_name}-issue-{self.issue_number}"
 
     @classmethod
     def from_issue_opened(

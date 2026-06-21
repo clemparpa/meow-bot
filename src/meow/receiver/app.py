@@ -17,11 +17,12 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from githubkit.webhooks import parse
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from meow.common.config import Settings
 from meow.common.github.webhook import InvalidSignature, verify_signature
 from meow.common.logging import get_logger
+from meow.common.webhooks_inputs.base_model import WebhookInput
 from meow.receiver.client import trigger_workflow
 
 # Side-effect import: every module under controllers/ registers its
@@ -36,7 +37,7 @@ logger = get_logger("receiver")
 app = FastAPI(title="meow-receiver", version="0.1.0")
 
 
-WorkflowDispatcher = Callable[[str, BaseModel, WebhookContext], Awaitable[dict[str, Any]]]
+WorkflowDispatcher = Callable[[str, WebhookInput, WebhookContext], Awaitable[dict[str, Any]]]
 
 
 def get_workflow_dispatcher() -> WorkflowDispatcher:
