@@ -1,3 +1,4 @@
+import re
 from typing import Literal, Self
 
 from githubkit.rest import WebhookIssuesLabeled, WebhookIssuesOpened
@@ -62,8 +63,11 @@ class IssueEventInput(WebhookInput):
     def idempotency_key(self) -> str:
         # Collapse opened+labeled (and any redelivery) for one issue. Repo-scoped
         # because the Mistral execution_id is unique per workspace, so issue #N
-        # of two repos must not dedup against each other.
-        return f"{self.repo_full_name}-issue-{self.issue_number}"
+        # of two repos must not dedup against each other. Mistral execution_ids
+        # allow only [A-Za-z0-9_-], but a repo's "owner/name" carries a slash (and
+        # GitHub allows '.'), so fold anything else to '_'.
+        safe_repo = re.sub(r"[^A-Za-z0-9_-]", "_", self.repo_full_name)
+        return f"{safe_repo}-issue-{self.issue_number}"
 
     @classmethod
     def from_issue_opened(

@@ -8,6 +8,7 @@ so every comment re-triggers.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from meow.common.webhooks_inputs.issue_comment import IssueCommentInput
@@ -40,8 +41,15 @@ def test_issue_key_collapses_opened_and_labeled() -> None:
     opened = _issue(action="opened", delivery="d1")
     labeled = _issue(action="labeled", added_label="meow:implement", delivery="d2")
     # Same issue, different deliveries → identical key: the two events collapse
-    # onto one execution.
-    assert opened.idempotency_key() == labeled.idempotency_key() == "owner/repo-issue-54"
+    # onto one execution. The repo slash is folded to '_' (execution_id charset).
+    assert opened.idempotency_key() == labeled.idempotency_key() == "owner_repo-issue-54"
+
+
+def test_issue_key_is_execution_id_safe() -> None:
+    # Mistral rejects an execution_id with anything outside [A-Za-z0-9_-]; the
+    # repo's slash (and a '.') must be folded out.
+    key = _issue(repo="my.org/weird.repo").idempotency_key()
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", key)
 
 
 def test_issue_key_differs_by_issue_and_repo() -> None:
