@@ -12,6 +12,10 @@ already carries ``repository.default_branch``.
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from meow.worker.sandbox.builder import SandboxBuilder
 
 __all__ = ["CloneSandboxSpec"]
 
@@ -24,3 +28,24 @@ class CloneSandboxSpec(BaseModel):
     # Branch name (or SHA) to clone and checkout — the repo's default branch
     # in the nominal flow. with_clone handles both forms.
     ref: str = Field(min_length=1)
+
+    def configure_builder(self, builder: SandboxBuilder) -> SandboxBuilder:
+        """Configure a :class:`SandboxBuilder` for a read-only clone sandbox.
+
+        Wire up ``with_meow_secrets`` and ``with_clone`` (at the specified ref),
+        plus ``with_report`` (the agent's output file). This is shared by both
+        feature-scope and feature-implement workflows — they differ only in
+        post-processing (feature-implement extracts a changeset).
+        Returns the builder for chaining or immediate use.
+        """
+        return (
+            builder.with_meow_secrets(
+                installation_id=self.installation_id,
+                repo_full_name=self.repo_full_name,
+            )
+            .with_clone(
+                repo_full_name=self.repo_full_name,
+                ref=self.ref,
+            )
+            .with_report()
+        )

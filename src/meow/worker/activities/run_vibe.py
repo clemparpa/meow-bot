@@ -163,32 +163,13 @@ async def _vibe_session(
 async def run_pr_review_vibe(task: VibeTask, sandbox_spec: PrSandboxSpec) -> VibeResult:
     """Run ``vibe`` inside a freshly-built PR-review sandbox.
 
-    The working tree holds the PR diff (``with_pr_diff``) and a PR-scoped
-    memory scratchpad (``with_memory``); the report file is git-ignored
-    (``with_report``). See :func:`_vibe_session` for the run/teardown semantics.
+    The sandbox is configured by :py:meth:`PrSandboxSpec.configure_builder`
+    which wires up ``with_pr_diff`` (the PR overlay), ``with_memory`` (the
+    PR-scoped scratchpad), and ``with_report`` (git-ignored output file).
+    See :func:`_vibe_session` for the run/teardown semantics.
     """
-    builder = (
+    builder = sandbox_spec.configure_builder(
         SandboxBuilder(config=SandboxBuilderConfig(delete_after_delay=_DELETE_AFTER_DELAY))
-        .with_meow_secrets(
-            installation_id=sandbox_spec.installation_id,
-            repo_full_name=sandbox_spec.repo_full_name,
-        )
-        .with_clone(
-            repo_full_name=sandbox_spec.repo_full_name,
-            ref=sandbox_spec.base_sha,
-        )
-        .with_pr_diff(
-            pr_number=sandbox_spec.pr_number,
-            base_sha=sandbox_spec.base_sha,
-            head_sha=sandbox_spec.head_sha,
-        )
-        .with_memory(
-            pr_number=sandbox_spec.pr_number,
-            base_sha=sandbox_spec.base_sha,
-            head_sha=sandbox_spec.head_sha,
-            repo_full_name=sandbox_spec.repo_full_name,
-        )
-        .with_report()
     )
     async with _vibe_session(builder, task) as (_sandbox, result):
         return result
@@ -201,21 +182,12 @@ async def run_pr_review_vibe(task: VibeTask, sandbox_spec: PrSandboxSpec) -> Vib
 async def run_feature_scope_vibe(task: VibeTask, sandbox_spec: CloneSandboxSpec) -> VibeResult:
     """Run ``vibe`` inside a feature-scoping sandbox.
 
-    A plain clone of the default branch — no PR diff to overlay. The report
-    file is git-ignored (``with_report``). See :func:`_vibe_session` for the
-    run/teardown semantics.
+    A plain clone of the default branch — no PR diff to overlay. The sandbox
+    is configured by :py:meth:`CloneSandboxSpec.configure_builder`. See
+    :func:`_vibe_session` for the run/teardown semantics.
     """
-    builder = (
+    builder = sandbox_spec.configure_builder(
         SandboxBuilder(config=SandboxBuilderConfig(delete_after_delay=_DELETE_AFTER_DELAY))
-        .with_meow_secrets(
-            installation_id=sandbox_spec.installation_id,
-            repo_full_name=sandbox_spec.repo_full_name,
-        )
-        .with_clone(
-            repo_full_name=sandbox_spec.repo_full_name,
-            ref=sandbox_spec.ref,
-        )
-        .with_report()
     )
     async with _vibe_session(builder, task) as (_sandbox, result):
         return result
@@ -316,22 +288,15 @@ async def run_feature_implement_vibe(
 
     The agent edits the working tree of a plain default-branch clone; it gets a
     ``contents: read`` token only (``with_meow_secrets`` default) so it cannot
-    push, and it runs no git itself. After it exits we extract its changeset
-    (read-only ``git status`` + file reads) and return it — the commit happens
-    worker-side in ``commit_changeset``. A terminated-early run yields an empty
-    changeset (we don't trust partial edits), so the workflow posts a comment.
+    push, and it runs no git itself. The sandbox is configured by
+    :py:meth:`CloneSandboxSpec.configure_builder`. After the vibe exits we
+    extract its changeset (read-only ``git status`` + file reads) and return it
+    — the commit happens worker-side in ``commit_changeset``. A terminated-early
+    run yields an empty changeset (we don't trust partial edits), so the
+    workflow posts a comment.
     """
-    builder = (
+    builder = sandbox_spec.configure_builder(
         SandboxBuilder(config=SandboxBuilderConfig(delete_after_delay=_IMPL_DELETE_AFTER_DELAY))
-        .with_meow_secrets(
-            installation_id=sandbox_spec.installation_id,
-            repo_full_name=sandbox_spec.repo_full_name,
-        )
-        .with_clone(
-            repo_full_name=sandbox_spec.repo_full_name,
-            ref=sandbox_spec.ref,
-        )
-        .with_report()
     )
     async with _vibe_session(builder, task, vibe_exec_timeout=_IMPL_VIBE_EXEC_TIMEOUT) as (
         sandbox,
